@@ -1265,9 +1265,164 @@ def test_functions_batch3():
         ok = False
     sys.stderr.flush()
 
-    sys.stderr.write("buildStamps SKIP (complex multi-function dependency)\n")
+    sys.stderr.write("buildStamps -> see test_build_stamps()\n")
     sys.stderr.write("buildSigMask SKIP (not found in functions.c)\n")
     sys.stderr.write("stampStats SKIP (not found in functions.c)\n")
     sys.stderr.flush()
+
+    return ok
+
+def test_build_stamps():
+    """buildStamps C vs numpy 影子测试"""
+    import sys
+    np.random.seed(123)
+    ok = True
+
+    cdef int rPixX = 200, rPixY = 200
+    cdef int totalPix = rPixX * rPixY
+    bg = np.float32(100.0)
+    img = np.full(totalPix, bg, dtype=np.float32)
+
+    yy, xx = np.mgrid[0:rPixY, 0:rPixX]
+    yyf = yy.ravel().astype(np.float32)
+    xxf = xx.ravel().astype(np.float32)
+    for sx, sy, flux in [(50, 50, 5000), (120, 80, 3000), (30, 150, 8000), (170, 40, 4000)]:
+        img += (flux * np.exp(-((xxf - sx)**2 + (yyf - sy)**2) / (2.0 * 3.0**2))).astype(np.float32)
+    img += np.random.randn(totalPix).astype(np.float32) * 10
+
+    tRData_py = img.copy()
+    iRData_py = img.copy() + np.random.randn(totalPix).astype(np.float32) * 5
+    mRData_py = np.zeros(totalPix, dtype=np.int32)
+
+    cdef int nStamps = 4
+    cdef int bgOrder = 2
+    cdef int nCompKer = 6
+    cdef int fwKSStamp = 15
+    cdef int nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int nC = nCompKer + nBGVectors
+    cdef int nKSStamps = 10
+    cdef int hwKSStamp = fwKSStamp // 2
+    cdef int fwStamp = 50
+
+    cdef int sXMin = 25, sXMax = 74
+    cdef int sYMin = 25, sYMax = 74
+    cdef int rXBMin = 0, rYBMin = 0
+
+    cdef float tUKThresh = 50000.0, iUKThresh = 50000.0
+    cdef float kerFitThresh = 20.0, statSig = 3.0
+    cdef int findSSC = 1
+    cdef int verbose = 0
+
+    cdef float *tRData_c = numpy_to_float_ptr(tRData_py)
+    cdef float *iRData_c = numpy_to_float_ptr(iRData_py)
+    cdef int *mRData_c = numpy_to_int_ptr(mRData_py)
+
+    cdef stamp_struct *ctStamps_c = <stamp_struct*>calloc(nStamps, sizeof(stamp_struct))
+    allocateStamps(ctStamps_c, nStamps, bgOrder, nCompKer, fwKSStamp, nC, nKSStamps)
+    cdef stamp_struct *ciStamps_c = <stamp_struct*>calloc(nStamps, sizeof(stamp_struct))
+    allocateStamps(ciStamps_c, nStamps, bgOrder, nCompKer, fwKSStamp, nC, nKSStamps)
+
+    cdef int niS_c = 0, ntS_c = 0
+    cdef char *lfc = "b"
+
+    buildStamps(sXMin, sXMax, sYMin, sYMax, &niS_c, &ntS_c, findSSC,
+                rXBMin, rYBMin, ciStamps_c, ctStamps_c,
+                iRData_c, tRData_c, 0, 0,
+                verbose, lfc, rPixX, rPixY,
+                tUKThresh, iUKThresh, hwKSStamp, fwStamp, nKSStamps,
+                kerFitThresh, mRData_c, statSig)
+
+    c_ct = stamp_c_to_dict(&ctStamps_c[0], nCompKer, nBGVectors, fwKSStamp, nC, nKSStamps)
+    c_ci = stamp_c_to_dict(&ciStamps_c[0], nCompKer, nBGVectors, fwKSStamp, nC, nKSStamps)
+    mRData_c_result = int_ptr_to_numpy(mRData_c, totalPix)
+
+    mRData_py_np = mRData_py.copy()
+
+    py_ctStamps = []
+    py_ciStamps = []
+    cdef int sidx
+    for sidx in range(nStamps):
+        py_ctStamps.append({
+            'x0': 0, 'y0': 0, 'x': 0, 'y': 0,
+            'nx': 0, 'ny': 0,
+            'nss': 0, 'sscnt': 0,
+            'xss': np.zeros(nKSStamps, dtype=np.int32),
+            'yss': np.zeros(nKSStamps, dtype=np.int32),
+            'krefArea': np.zeros(fwKSStamp * fwKSStamp, dtype=np.float64),
+            'vectors': np.zeros((nCompKer + nBGVectors, fwKSStamp * fwKSStamp), dtype=np.float64),
+            'mat': np.zeros((nC, nC), dtype=np.float64),
+            'scprod': np.zeros(nC, dtype=np.float64),
+            'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
+            'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0,
+            'chi2': 0.0, 'norm': 0.0, 'diff': 0.0,
+        })
+        py_ciStamps.append({
+            'x0': 0, 'y0': 0, 'x': 0, 'y': 0,
+            'nx': 0, 'ny': 0,
+            'nss': 0, 'sscnt': 0,
+            'xss': np.zeros(nKSStamps, dtype=np.int32),
+            'yss': np.zeros(nKSStamps, dtype=np.int32),
+            'krefArea': np.zeros(fwKSStamp * fwKSStamp, dtype=np.float64),
+            'vectors': np.zeros((nCompKer + nBGVectors, fwKSStamp * fwKSStamp), dtype=np.float64),
+            'mat': np.zeros((nC, nC), dtype=np.float64),
+            'scprod': np.zeros(nC, dtype=np.float64),
+            'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
+            'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0,
+            'chi2': 0.0, 'norm': 0.0, 'diff': 0.0,
+        })
+
+    from pyhotpants.numutils import build_stamps_numpy
+    build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, 0, 0,
+                       findSSC, rXBMin, rYBMin, py_ciStamps, py_ctStamps,
+                       iRData_py, tRData_py, 0, 0,
+                       verbose, "b", rPixX, rPixY,
+                       tUKThresh, iUKThresh, hwKSStamp, fwStamp, nKSStamps,
+                       kerFitThresh, mRData_py_np, statSig)
+
+    py_ct = py_ctStamps[0]
+    py_ci = py_ciStamps[0]
+
+    for field in ['nss', 'sscnt', 'x0', 'y0', 'x', 'y']:
+        if c_ct[field] != py_ct[field]:
+            sys.stderr.write(f"buildStamps ctStamp.{field} FAIL: C={c_ct[field]}, py={py_ct[field]}\n")
+            ok = False
+        if c_ci[field] != py_ci[field]:
+            sys.stderr.write(f"buildStamps ciStamp.{field} FAIL: C={c_ci[field]}, py={py_ci[field]}\n")
+            ok = False
+
+    for field in ['sum', 'mean', 'median', 'mode', 'sd', 'fwhm', 'lfwhm']:
+        if abs(c_ct[field] - py_ct[field]) > 1e-4:
+            sys.stderr.write(f"buildStamps ctStamp.{field} FAIL: C={c_ct[field]:.6f}, py={py_ct[field]:.6f}\n")
+            ok = False
+        if abs(c_ci[field] - py_ci[field]) > 1e-4:
+            sys.stderr.write(f"buildStamps ciStamp.{field} FAIL: C={c_ci[field]:.6f}, py={py_ci[field]:.6f}\n")
+            ok = False
+
+    for prefix, cs, ps in [("ct", c_ct, py_ct), ("ci", c_ci, py_ci)]:
+        nssVal = cs['nss']
+        if nssVal > 0:
+            if not np.array_equal(cs['xss'][:nssVal], ps['xss'][:nssVal]):
+                sys.stderr.write(f"buildStamps {prefix}Stamp.xss FAIL: C={cs['xss'][:nssVal]}, py={ps['xss'][:nssVal]}\n")
+                ok = False
+            if not np.array_equal(cs['yss'][:nssVal], ps['yss'][:nssVal]):
+                sys.stderr.write(f"buildStamps {prefix}Stamp.yss FAIL: C={cs['yss'][:nssVal]}, py={ps['yss'][:nssVal]}\n")
+                ok = False
+
+    if not np.array_equal(mRData_c_result, mRData_py_np):
+        ndiff = int(np.sum(mRData_c_result != mRData_py_np))
+        sys.stderr.write(f"buildStamps mRData FAIL: {ndiff} diffs\n")
+        ok = False
+
+    if ok:
+        sys.stderr.write("buildStamps PASS\n")
+    sys.stderr.flush()
+
+    freeStampMem(ctStamps_c, nStamps, nCompKer, nBGVectors, nC)
+    free(ctStamps_c)
+    freeStampMem(ciStamps_c, nStamps, nCompKer, nBGVectors, nC)
+    free(ciStamps_c)
+    free(tRData_c)
+    free(iRData_c)
+    free(mRData_c)
 
     return ok

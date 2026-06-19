@@ -146,6 +146,7 @@ cdef extern from "functions.h":
     void dfset(double *, double, int, int)
     void quick_sort(double *, int *, int)
     void buildStamps(int, int, int, int, int *, int *, int, int, int, stamp_struct *, stamp_struct *, float *, float *, float, float, int, char *, int, int, float, float, int, int, int, float, int *, float)
+    void freeStampMem(stamp_struct *, int, int, int, int)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(
