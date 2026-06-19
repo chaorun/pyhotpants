@@ -147,6 +147,19 @@ cdef extern from "functions.h":
     void quick_sort(double *, int *, int)
     void buildStamps(int, int, int, int, int *, int *, int, int, int, stamp_struct *, stamp_struct *, float *, float *, float, float, int, char *, int, int, float, float, int, int, int, float, int *, float)
     void freeStampMem(stamp_struct *, int, int, int, int)
+    double get_background(int, int, double *, int, int, int, int, int)
+    void getFinalStampSig(stamp_struct *, float *, float *, double *, int, int, int, int *)
+    double make_kernel(int, int, double *, int, int, int, int, int, double **, double *, double *)
+    void lubksb(double **, int, int *, double *)
+    int ludcmp(double **, int, int *, double *)
+    double *kernel_vector_PCA(int, int, int, int, int *, int, float **, double **)
+    void getKernelVec(int, int *, double **, int, int, int, float *, double *, double *, float **)
+    double *kernel_vector(int, int, int, int, int *, int, int, int, float *, double *, double *, double **, float **)
+    void xy_conv_stamp(stamp_struct *, float *, int, int, int, int, int, int, int, int, double *, double *, float *, float **)
+    void xy_conv_stamp_PCA(stamp_struct *, float *, int, int, int, int, int, int, int, float **)
+    void build_matrix0(stamp_struct *, int, int, int, int)
+    void build_scprod0(stamp_struct *, float *, int, int, int, int, int, int)
+    void make_model(stamp_struct *, double *, float *, int, int, int, int, int)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(

@@ -767,3 +767,358 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                     ciStamps[niS]['xss'][nss] = xmax
                     ciStamps[niS]['yss'][nss] = ymax
                     ciStamps[niS]['nss'] += 1
+
+
+def get_background_numpy(xi, yi, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY):
+    ncompBG = (nCompKer - 1) * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+    background = 0.0
+    k = 1
+    xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+    yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+    ax = 1.0
+    for i in range(bgOrder + 1):
+        ay = 1.0
+        for j in range(bgOrder - i + 1):
+            background += kernelSol[ncompBG + k] * ax * ay
+            k += 1
+            ay *= yf
+        ax *= xf
+    return background
+
+
+def get_final_stamp_sig_numpy(stamp, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
+    xRegion = int(stamp['xss'][stamp['sscnt']])
+    yRegion = int(stamp['yss'][stamp['sscnt']])
+    sig = 0.0
+    nsig = 0
+    for j in range(fwKSStamp):
+        yRegion2 = yRegion - hwKSStamp + j
+        for i in range(fwKSStamp):
+            xRegion2 = xRegion - hwKSStamp + i
+            idx = xRegion2 + rPixX * yRegion2
+            idat = np.float32(imDiff[idx])
+            indat = np.float32(1.0 / float(np.float32(imNoise[idx])))
+            if int(mRData[idx]) & FLAG_INPUT_ISBAD:
+                continue
+            nsig += 1
+            sig += float(np.float32(np.float32(np.float32(idat * idat) * indat) * indat))
+    if nsig > 0:
+        sig /= nsig
+    else:
+        sig = -1.0
+    return sig
+
+
+def make_kernel_numpy(xi, yi, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKernel,
+                      kernel_vec, kernel_coeffs, kernel):
+    k = 2
+    xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+    yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+    for i1 in range(1, nCompKer):
+        coeff = 0.0
+        ax = 1.0
+        for ix in range(kerOrder + 1):
+            ay = 1.0
+            for iy in range(kerOrder - ix + 1):
+                coeff += float(kernelSol[k]) * ax * ay
+                k += 1
+                ay *= yf
+            ax *= xf
+        kernel_coeffs[i1] = coeff
+    kernel_coeffs[0] = float(kernelSol[1])
+    fwSq = fwKernel * fwKernel
+    for i in range(fwSq):
+        kernel[i] = 0.0
+    sum_kernel = 0.0
+    for i in range(fwSq):
+        val = 0.0
+        for i1 in range(nCompKer):
+            val += float(kernel_coeffs[i1]) * float(kernel_vec[i1][i])
+        kernel[i] = val
+        sum_kernel += val
+    return sum_kernel
+
+
+def lubksb_numpy(a, n, indx, b):
+    ii = 0
+    for i in range(1, n + 1):
+        ip = int(indx[i])
+        sum_val = b[ip]
+        b[ip] = b[i]
+        if ii:
+            for j in range(ii, i):
+                sum_val -= a[i, j] * b[j]
+        elif sum_val != 0.0:
+            ii = i
+        b[i] = sum_val
+    for i in range(n, 0, -1):
+        sum_val = b[i]
+        for j in range(i + 1, n + 1):
+            sum_val -= a[i, j] * b[j]
+        b[i] = sum_val / a[i, i]
+
+
+def kernel_vector_pca_numpy(n, deg_x, deg_y, ig, fwKernel, PCA, kernel_vec):
+    vector = np.zeros(fwKernel * fwKernel, dtype=np.float64)
+    for i in range(fwKernel):
+        for j in range(fwKernel):
+            vector[i + fwKernel * j] = float(PCA[n][i + fwKernel * j])
+    ren = 0
+    if n > 0:
+        kernel0 = kernel_vec[0]
+        for i in range(fwKernel * fwKernel):
+            vector[i] -= kernel0[i]
+        ren = 1
+    return vector, ren
+
+
+def kernel_vector_numpy(n, deg_x, deg_y, ig, usePCA, fwKernel, hwKernel,
+                        sigma_gauss, filter_x, filter_y, kernel_vec, PCA):
+    if usePCA:
+        vec, ren = kernel_vector_pca_numpy(n, deg_x, deg_y, ig, fwKernel, PCA, kernel_vec)
+        return vec, ren
+
+    vector = np.zeros(fwKernel * fwKernel, dtype=np.float64)
+    dx = (deg_x // 2) * 2 - deg_x
+    dy = (deg_y // 2) * 2 - deg_y
+    sum_x = 0.0
+    sum_y = 0.0
+    ren = 0
+
+    for ix in range(fwKernel):
+        x = float(ix - hwKernel)
+        k = ix + n * fwKernel
+        qe = math.exp(-x * x * float(sigma_gauss[ig]))
+        filter_x[k] = qe * math.pow(x, deg_x)
+        filter_y[k] = qe * math.pow(x, deg_y)
+        sum_x += filter_x[k]
+        sum_y += filter_y[k]
+
+    kernel0 = None
+    if n > 0:
+        kernel0 = kernel_vec[0].copy()
+
+    sum_x = 1.0 / sum_x
+    sum_y = 1.0 / sum_y
+
+    if dx == 0 and dy == 0:
+        for ix in range(fwKernel):
+            filter_x[ix + n * fwKernel] *= sum_x
+            filter_y[ix + n * fwKernel] *= sum_y
+
+        for i in range(fwKernel):
+            for j in range(fwKernel):
+                vector[i + fwKernel * j] = filter_x[i + n * fwKernel] * filter_y[j + n * fwKernel]
+
+        if n > 0:
+            for i in range(fwKernel * fwKernel):
+                vector[i] -= kernel0[i]
+            ren = 1
+    else:
+        for i in range(fwKernel):
+            for j in range(fwKernel):
+                vector[i + fwKernel * j] = filter_x[i + n * fwKernel] * filter_y[j + n * fwKernel]
+
+    return vector, ren
+
+
+def get_kernel_vec_numpy(ngauss, deg_fixe, usePCA, fwKernel, hwKernel,
+                         sigma_gauss, filter_x, filter_y, PCA):
+    kernel_vec = []
+    nvec = 0
+    for ig in range(ngauss):
+        for idegx in range(int(deg_fixe[ig]) + 1):
+            for idegy in range(int(deg_fixe[ig]) - idegx + 1):
+                vec, ren = kernel_vector_numpy(nvec, idegx, idegy, ig, usePCA,
+                                               fwKernel, hwKernel, sigma_gauss,
+                                               filter_x, filter_y, kernel_vec, PCA)
+                kernel_vec.append(vec)
+                nvec += 1
+    return kernel_vec
+
+
+def ludcmp_numpy(a, n, indx):
+    TINY = 1.0e-20
+    d = 1.0
+    vv = np.zeros(n + 1, dtype=np.float64)
+
+    for i in range(1, n + 1):
+        big = 0.0
+        for j in range(1, n + 1):
+            temp2 = abs(a[i, j])
+            if temp2 > big:
+                big = temp2
+        if big == 0.0:
+            return 1, d
+        vv[i] = 1.0 / big
+
+    imax = 0
+    for j in range(1, n + 1):
+        for i in range(1, j):
+            sum_val = a[i, j]
+            for k in range(1, i):
+                sum_val -= a[i, k] * a[k, j]
+            a[i, j] = sum_val
+
+        big = 0.0
+        for i in range(j, n + 1):
+            sum_val = a[i, j]
+            for k in range(1, j):
+                sum_val -= a[i, k] * a[k, j]
+            a[i, j] = sum_val
+            dum = vv[i] * abs(sum_val)
+            if dum >= big:
+                big = dum
+                imax = i
+
+        if j != imax:
+            for k in range(1, n + 1):
+                dum = a[imax, k]
+                a[imax, k] = a[j, k]
+                a[j, k] = dum
+            d = -d
+            vv[imax] = vv[j]
+
+        indx[j] = imax
+        if a[j, j] == 0.0:
+            a[j, j] = TINY
+        if j != n:
+            dum = 1.0 / a[j, j]
+            for i in range(j + 1, n + 1):
+                a[i, j] *= dum
+
+    return 0, d
+
+
+def xy_conv_stamp_numpy(stamp, image, n, ren, usePCA, fwKSStamp, fwKernel,
+                         hwKSStamp, hwKernel, rPixX, filter_x, filter_y, temp, PCA):
+    if usePCA:
+        xy_conv_stamp_pca_numpy(stamp, image, n, ren, fwKSStamp, hwKSStamp,
+                                hwKernel, fwKernel, rPixX, PCA)
+        return
+
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+
+    sub_width = fwKSStamp + fwKernel - 1
+
+    for i in range(xi - hwKSStamp - hwKernel, xi + hwKSStamp + hwKernel + 1):
+        for j in range(yi - hwKSStamp, yi + hwKSStamp + 1):
+            xij = i - xi + sub_width // 2 + sub_width * (j - yi + hwKSStamp)
+            temp[xij] = 0.0
+            for yc in range(-hwKernel, hwKernel + 1):
+                temp[xij] += float(image[i + rPixX * (j + yc)]) * filter_y[hwKernel - yc + n * fwKernel]
+
+    for j in range(-hwKSStamp, hwKSStamp + 1):
+        for i in range(-hwKSStamp, hwKSStamp + 1):
+            xij = i + hwKSStamp + fwKSStamp * (j + hwKSStamp)
+            stamp['vectors'][n][xij] = 0.0
+            for xc in range(-hwKernel, hwKernel + 1):
+                stamp['vectors'][n][xij] += temp[i + xc + sub_width // 2 + sub_width * (j + hwKSStamp)] * filter_x[hwKernel - xc + n * fwKernel]
+
+    if ren:
+        for i in range(fwKSStamp * fwKSStamp):
+            stamp['vectors'][n][i] -= stamp['vectors'][0][i]
+
+
+def xy_conv_stamp_pca_numpy(stamp, image, n, ren, fwKSStamp, hwKSStamp,
+                             hwKernel, fwKernel, rPixX, PCA):
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+
+    for j in range(yi - hwKSStamp, yi + hwKSStamp + 1):
+        for i in range(xi - hwKSStamp, xi + hwKSStamp + 1):
+            xij = i - (xi - hwKSStamp) + fwKSStamp * (j - (yi - hwKSStamp))
+            stamp['vectors'][n][xij] = 0.0
+            for yc in range(-hwKernel, hwKernel + 1):
+                for xc in range(-hwKernel, hwKernel + 1):
+                    val_img = np.float32(image[(i + xc) + rPixX * (j + yc)])
+                    val_pca = np.float32(PCA[n][(xc + hwKernel) + fwKernel * (yc + hwKernel)])
+                    stamp['vectors'][n][xij] += float(val_img * val_pca)
+
+    if ren:
+        for i in range(fwKSStamp * fwKSStamp):
+            stamp['vectors'][n][i] -= stamp['vectors'][0][i]
+
+
+def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
+    ncomp1 = nCompKer
+    pixStamp = fwKSStamp * fwKSStamp
+    vec = stamp['vectors']
+
+    for i in range(ncomp1):
+        for j in range(i + 1):
+            q = 0.0
+            for k in range(pixStamp):
+                q += vec[i][k] * vec[j][k]
+            stamp['mat'][i + 1][j + 1] = q
+
+    ivecbg = 0
+    for i1 in range(ncomp1):
+        ivecbg = ncomp1
+        p0 = 0.0
+        for k in range(pixStamp):
+            p0 += vec[i1][k] * vec[ivecbg][k]
+        stamp['mat'][ncomp1 + 1][i1 + 1] = p0
+
+    q = 0.0
+    for k in range(pixStamp):
+        q += vec[ivecbg][k] * vec[ncomp1][k]
+    stamp['mat'][ncomp1 + 1][ncomp1 + 1] = q
+
+
+def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
+                         fwKSStamp, hwKSStamp, rPixX):
+    ncomp1 = nCompKer
+    vec = stamp['vectors']
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+
+    for i1 in range(ncomp1):
+        p0 = 0.0
+        for xc in range(-hwKSStamp, hwKSStamp + 1):
+            for yc in range(-hwKSStamp, hwKSStamp + 1):
+                k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+                p0 += vec[i1][k] * float(image[xc + xi + rPixX * (yc + yi)])
+        stamp['scprod'][i1 + 1] = p0
+
+    q = 0.0
+    for xc in range(-hwKSStamp, hwKSStamp + 1):
+        for yc in range(-hwKSStamp, hwKSStamp + 1):
+            k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+            q += vec[ncomp1][k] * float(image[xc + xi + rPixX * (yc + yi)])
+    stamp['scprod'][ncomp1 + 1] = q
+
+
+def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+
+    xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+    yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+
+    fwSq = fwKSStamp * fwKSStamp
+    csModel = np.zeros(fwSq, dtype=np.float32)
+
+    vector = stamp['vectors'][0]
+    coeff = kernelSol[1]
+    for i in range(fwSq):
+        csModel[i] += np.float32(coeff * vector[i])
+
+    k = 2
+    for i1 in range(1, nCompKer):
+        vector = stamp['vectors'][i1]
+        coeff = 0.0
+        ax = 1.0
+        for ix in range(kerOrder + 1):
+            ay = 1.0
+            for iy in range(kerOrder - ix + 1):
+                coeff += kernelSol[k] * ax * ay
+                k += 1
+                ay *= yf
+            ax *= xf
+
+        for i in range(fwSq):
+            csModel[i] += np.float32(coeff * vector[i])
+
+    return csModel

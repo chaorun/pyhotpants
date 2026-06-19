@@ -362,3 +362,48 @@ numpy 为主路径，C 为影子，逐字节对比所有输出（diffOut, noiseO
 4. 调用 numpy 版本获取输出
 5. 逐值对比（float 允许 eps 误差或要求逐字节一致）
 6. 释放 C 内存
+
+### alard.c numpy 化计划
+
+alard.c 包含 Alard & Lupton 算法的核心实现，共 21 个函数约 1700 行。
+自底向上分四批执行，每批完成后影子测试验证。
+
+#### 精度要求
+
+- ludcmp/lubksb：逐行翻译（不用 np.linalg.solve 替代），对比差异 < 1e-5 可接受
+- 其他函数：逐字节一致或浮点精度内差异可接受
+
+#### 函数清单与依赖关系
+
+| 函数 | 行数 | 难度 | 被谁调用 | 调用谁 |
+|------|------|------|----------|--------|
+| get_background | 29 | 低 | region_output | 无 |
+| getFinalStampSig | 34 | 低 | region_output | 无 |
+| make_kernel | 40 | 低 | region_convolve_diff | 无 |
+| lubksb | 20 | 低 | check_stamps, fitKernel | 无 |
+| kernel_vector_PCA | 30 | 低 | fillStamp(PCA模式) | 无 |
+| kernel_vector | 64 | 中 | fillStamp, xy_conv_stamp | 无 |
+| getKernelVec | 18 | 低-中 | region_buildstamps | kernel_vector |
+| ludcmp | 67 | 中 | check_stamps, fitKernel | 无 |
+| xy_conv_stamp | 50 | 中 | fillStamp | kernel_vector |
+| xy_conv_stamp_PCA | 34 | 中 | fillStamp(PCA模式) | 无 |
+| build_matrix0 | 51 | 中 | fitKernel | 无 |
+| build_scprod0 | 46 | 中 | fitKernel | 无 |
+| make_model | 47 | 中 | getStampSig | 无 |
+| build_matrix | 123 | 中高 | check_stamps | 无 |
+| build_scprod | 59 | 中高 | check_stamps | 无 |
+| fillStamp | 83 | 中高 | region_fit, check_again | xy_conv_stamp, kernel_vector |
+| getStampSig | 79 | 中高 | check_stamps, check_again | make_model |
+| spatial_convolve | 96 | 高 | region_convolve_diff | 无 |
+| fitKernel | 66 | 高 | region_convolve_diff | build_matrix0, build_scprod0, ludcmp, lubksb, check_again |
+| check_stamps | 242 | 高 | region_fit | build_matrix, build_scprod, ludcmp, lubksb, getStampSig |
+| check_again | 105 | 高 | fitKernel | fillStamp, getStampSig, xy_conv_stamp |
+
+#### 执行批次
+
+| 批次 | 函数 | 状态 |
+|------|------|------|
+| 第一批（无依赖，低难度） | get_background, getFinalStampSig, make_kernel, lubksb, kernel_vector_PCA | 待做 |
+| 第二批（底层，中等） | kernel_vector, getKernelVec, ludcmp, xy_conv_stamp, xy_conv_stamp_PCA, build_matrix0, build_scprod0, make_model | 待做 |
+| 第三批（中间层） | build_matrix, build_scprod, fillStamp, getStampSig | 待做 |
+| 第四批（顶层，最难） | check_stamps, fitKernel, check_again, spatial_convolve | 待做 |

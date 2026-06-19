@@ -288,6 +288,25 @@ cdef void free_double_pp(double **ptr, int rows):
                 free(ptr[i])
         free(ptr)
 
+cdef float** numpy2d_to_float_pp(np.ndarray arr):
+    cdef int rows = arr.shape[0], cols = arr.shape[1]
+    cdef int i, j
+    cdef float **ptr = <float**>malloc(rows * sizeof(float*))
+    cdef np.ndarray[float, ndim=2] arr32 = arr.astype(np.float32)
+    for i in range(rows):
+        ptr[i] = <float*>malloc(cols * sizeof(float))
+        for j in range(cols):
+            ptr[i][j] = arr32[i, j]
+    return ptr
+
+cdef void free_float_pp(float **ptr, int rows):
+    cdef int i
+    if ptr != NULL:
+        for i in range(rows):
+            if ptr[i] != NULL:
+                free(ptr[i])
+        free(ptr)
+
 def test_convert_roundtrip():
     import sys
     ok = True
@@ -1424,5 +1443,568 @@ def test_build_stamps():
     free(tRData_c)
     free(iRData_c)
     free(mRData_c)
+
+    return ok
+
+def test_alard_batch1():
+    import sys
+    from pyhotpants.numutils import (get_background_numpy, get_final_stamp_sig_numpy,
+                                      make_kernel_numpy, lubksb_numpy,
+                                      kernel_vector_pca_numpy)
+    ok = True
+    np.random.seed(200)
+
+    # ===== get_background =====
+    cdef int gb_nCompKer = 4, gb_kerOrder = 2, gb_bgOrder = 2
+    cdef int gb_rPixX = 200, gb_rPixY = 200
+    cdef int gb_nBGVectors = (gb_bgOrder + 1) * (gb_bgOrder + 2) // 2
+    cdef int gb_ncompBG = (gb_nCompKer - 1) * (((gb_kerOrder + 1) * (gb_kerOrder + 2)) // 2) + 1
+    cdef int gb_totalSol = gb_ncompBG + 1 + gb_nBGVectors
+    gb_kerSol_np = np.random.randn(gb_totalSol).astype(np.float64)
+    cdef int gb_xi = 100, gb_yi = 80
+
+    cdef double *gb_kerSol_c = numpy_to_double_ptr(gb_kerSol_np)
+    cdef double gb_c_result = get_background(gb_xi, gb_yi, gb_kerSol_c, gb_nCompKer, gb_kerOrder, gb_bgOrder, gb_rPixX, gb_rPixY)
+    free(gb_kerSol_c)
+
+    gb_py_result = get_background_numpy(gb_xi, gb_yi, gb_kerSol_np, gb_nCompKer, gb_kerOrder, gb_bgOrder, gb_rPixX, gb_rPixY)
+
+    if abs(gb_c_result - gb_py_result) > 0:
+        sys.stderr.write(f"get_background FAIL: C={gb_c_result}, py={gb_py_result}, diff={abs(gb_c_result - gb_py_result)}\n")
+        ok = False
+    else:
+        sys.stderr.write("get_background PASS\n")
+    sys.stderr.flush()
+
+    # ===== getFinalStampSig =====
+    cdef int fss_fwKSStamp = 11, fss_hwKSStamp = 5
+    cdef int fss_rPixX = 100
+    cdef int fss_xCenter = 40, fss_yCenter = 30
+    cdef int fss_totalPix = fss_rPixX * 50
+    cdef int fss_nKSStamps = 3
+
+    fss_imDiff = np.random.randn(fss_totalPix).astype(np.float32) * 10.0
+    fss_imNoise = (np.abs(np.random.randn(fss_totalPix).astype(np.float32)) + 1.0).astype(np.float32)
+    fss_mRData = np.zeros(fss_totalPix, dtype=np.int32)
+    fss_mRData[fss_xCenter + 2 + fss_rPixX * fss_yCenter] = 0x80
+
+    cdef stamp_struct fss_stamp
+    memset(&fss_stamp, 0, sizeof(stamp_struct))
+    fss_stamp.sscnt = 0
+    fss_stamp.xss = <int*>calloc(fss_nKSStamps, sizeof(int))
+    fss_stamp.yss = <int*>calloc(fss_nKSStamps, sizeof(int))
+    fss_stamp.xss[0] = fss_xCenter
+    fss_stamp.yss[0] = fss_yCenter
+
+    cdef float *fss_imDiff_c = numpy_to_float_ptr(fss_imDiff)
+    cdef float *fss_imNoise_c = numpy_to_float_ptr(fss_imNoise)
+    cdef int *fss_mRData_c = numpy_to_int_ptr(fss_mRData)
+    cdef double fss_c_sig = 0.0
+    getFinalStampSig(&fss_stamp, fss_imDiff_c, fss_imNoise_c, &fss_c_sig, fss_fwKSStamp, fss_hwKSStamp, fss_rPixX, fss_mRData_c)
+    free(fss_imDiff_c)
+    free(fss_imNoise_c)
+    free(fss_mRData_c)
+    free(fss_stamp.xss)
+    free(fss_stamp.yss)
+
+    fss_stamp_dict = {
+        'xss': np.array([fss_xCenter, 0, 0], dtype=np.int32),
+        'yss': np.array([fss_yCenter, 0, 0], dtype=np.int32),
+        'sscnt': 0,
+    }
+    fss_py_sig = get_final_stamp_sig_numpy(fss_stamp_dict, fss_imDiff, fss_imNoise, fss_fwKSStamp, fss_hwKSStamp, fss_rPixX, fss_mRData)
+
+    if abs(fss_c_sig - fss_py_sig) > 0:
+        sys.stderr.write(f"getFinalStampSig FAIL: C={fss_c_sig}, py={fss_py_sig}, diff={abs(fss_c_sig - fss_py_sig)}\n")
+        ok = False
+    else:
+        sys.stderr.write("getFinalStampSig PASS\n")
+    sys.stderr.flush()
+
+    # ===== make_kernel =====
+    cdef int mk_nCompKer = 3, mk_kerOrder = 2, mk_fwKernel = 11
+    cdef int mk_rPixX = 200, mk_rPixY = 200
+    cdef int mk_xi = 100, mk_yi = 80
+    cdef int mk_nTerms = ((mk_kerOrder + 1) * (mk_kerOrder + 2)) // 2
+    cdef int mk_totalKerSol = 2 + (mk_nCompKer - 1) * mk_nTerms
+    mk_kerSol_np = np.random.randn(mk_totalKerSol).astype(np.float64)
+    mk_kv_np = np.random.randn(mk_nCompKer, mk_fwKernel * mk_fwKernel).astype(np.float64)
+
+    cdef double *mk_kerSol_c = numpy_to_double_ptr(mk_kerSol_np)
+    cdef double **mk_kv_c = numpy2d_to_double_pp(mk_kv_np)
+    cdef double *mk_kcoeff_c = <double*>calloc(mk_nCompKer, sizeof(double))
+    cdef double *mk_ker_c = <double*>calloc(mk_fwKernel * mk_fwKernel, sizeof(double))
+    cdef double mk_c_sum = make_kernel(mk_xi, mk_yi, mk_kerSol_c, mk_rPixX, mk_rPixY, mk_nCompKer, mk_kerOrder, mk_fwKernel, mk_kv_c, mk_kcoeff_c, mk_ker_c)
+
+    mk_kcoeff_c_result = double_ptr_to_numpy(mk_kcoeff_c, mk_nCompKer)
+    mk_ker_c_result = double_ptr_to_numpy(mk_ker_c, mk_fwKernel * mk_fwKernel)
+    free(mk_kerSol_c)
+    free_double_pp(mk_kv_c, mk_nCompKer)
+    free(mk_kcoeff_c)
+    free(mk_ker_c)
+
+    mk_kcoeff_py = np.zeros(mk_nCompKer, dtype=np.float64)
+    mk_ker_py = np.zeros(mk_fwKernel * mk_fwKernel, dtype=np.float64)
+    mk_py_sum = make_kernel_numpy(mk_xi, mk_yi, mk_kerSol_np, mk_rPixX, mk_rPixY, mk_nCompKer, mk_kerOrder, mk_fwKernel, mk_kv_np, mk_kcoeff_py, mk_ker_py)
+
+    mk_ok = True
+    if abs(mk_c_sum - mk_py_sum) > 1e-12:
+        sys.stderr.write(f"make_kernel sumKernel FAIL: C={mk_c_sum}, py={mk_py_sum}\n")
+        mk_ok = False
+    if not np.allclose(mk_kcoeff_c_result, mk_kcoeff_py, atol=1e-12, rtol=0):
+        sys.stderr.write(f"make_kernel kernel_coeffs FAIL: max diff={np.max(np.abs(mk_kcoeff_c_result - mk_kcoeff_py))}\n")
+        mk_ok = False
+    if not np.allclose(mk_ker_c_result, mk_ker_py, atol=1e-12, rtol=0):
+        sys.stderr.write(f"make_kernel kernel FAIL: max diff={np.max(np.abs(mk_ker_c_result - mk_ker_py))}\n")
+        mk_ok = False
+    if mk_ok:
+        sys.stderr.write("make_kernel PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    # ===== lubksb =====
+    cdef int lu_n = 6
+    lu_a_np = np.zeros((lu_n + 1, lu_n + 1), dtype=np.float64)
+    lu_a_np[1:lu_n+1, 1:lu_n+1] = np.random.randn(lu_n, lu_n) * 2.0 + np.eye(lu_n) * 10.0
+    lu_b_np = np.zeros(lu_n + 1, dtype=np.float64)
+    lu_b_np[1:lu_n+1] = np.random.randn(lu_n)
+
+    cdef double **lu_a_c = numpy2d_to_double_pp(lu_a_np)
+    cdef int *lu_indx_c = <int*>calloc(lu_n + 1, sizeof(int))
+    cdef double lu_d = 0.0
+    cdef double *lu_b_c = NULL
+    cdef int lu_rc = ludcmp(lu_a_c, lu_n, lu_indx_c, &lu_d)
+
+    if lu_rc != 0:
+        sys.stderr.write("lubksb SKIP: ludcmp returned singular\n")
+    else:
+        lu_a_lu_np = double_pp_to_numpy2d(lu_a_c, lu_n + 1, lu_n + 1)
+        lu_indx_np = int_ptr_to_numpy(lu_indx_c, lu_n + 1)
+
+        lu_b_c = numpy_to_double_ptr(lu_b_np)
+        lubksb(lu_a_c, lu_n, lu_indx_c, lu_b_c)
+        lu_b_c_result = double_ptr_to_numpy(lu_b_c, lu_n + 1)
+        free(lu_b_c)
+
+        lu_b_py = lu_b_np.copy()
+        lubksb_numpy(lu_a_lu_np, lu_n, lu_indx_np, lu_b_py)
+
+        lu_maxdiff = np.max(np.abs(lu_b_c_result[1:lu_n+1] - lu_b_py[1:lu_n+1]))
+        if lu_maxdiff > 1e-5:
+            sys.stderr.write(f"lubksb FAIL: max diff={lu_maxdiff}\n")
+            ok = False
+        else:
+            sys.stderr.write(f"lubksb PASS (max diff={lu_maxdiff:.2e})\n")
+
+    free_double_pp(lu_a_c, lu_n + 1)
+    free(lu_indx_c)
+    sys.stderr.flush()
+
+    # ===== kernel_vector_PCA =====
+    cdef int pca_fwKernel = 7
+    cdef int pca_nComp = 3
+    pca_PCA_np = np.random.randn(pca_nComp, pca_fwKernel * pca_fwKernel).astype(np.float32)
+    pca_kv_np = np.random.randn(pca_nComp, pca_fwKernel * pca_fwKernel).astype(np.float64)
+
+    cdef float **pca_PCA_c = numpy2d_to_float_pp(pca_PCA_np)
+    cdef double **pca_kv_c = numpy2d_to_double_pp(pca_kv_np)
+
+    cdef int pca_ren_c0 = 0
+    cdef double *pca_vec_c0 = kernel_vector_PCA(0, 0, 0, 0, &pca_ren_c0, pca_fwKernel, pca_PCA_c, pca_kv_c)
+    pca_vec_c0_np = double_ptr_to_numpy(pca_vec_c0, pca_fwKernel * pca_fwKernel)
+    free(pca_vec_c0)
+
+    pca_vec_py0, pca_ren_py0 = kernel_vector_pca_numpy(0, 0, 0, 0, pca_fwKernel, pca_PCA_np, pca_kv_np)
+
+    pca_ok = True
+    if pca_ren_c0 != pca_ren_py0:
+        sys.stderr.write(f"kernel_vector_PCA n=0 ren FAIL: C={pca_ren_c0}, py={pca_ren_py0}\n")
+        pca_ok = False
+    if not np.array_equal(pca_vec_c0_np, pca_vec_py0):
+        sys.stderr.write(f"kernel_vector_PCA n=0 vector FAIL: max diff={np.max(np.abs(pca_vec_c0_np - pca_vec_py0))}\n")
+        pca_ok = False
+
+    cdef int pca_ren_c1 = 0
+    cdef double *pca_vec_c1 = kernel_vector_PCA(1, 0, 0, 0, &pca_ren_c1, pca_fwKernel, pca_PCA_c, pca_kv_c)
+    pca_vec_c1_np = double_ptr_to_numpy(pca_vec_c1, pca_fwKernel * pca_fwKernel)
+    free(pca_vec_c1)
+
+    pca_vec_py1, pca_ren_py1 = kernel_vector_pca_numpy(1, 0, 0, 0, pca_fwKernel, pca_PCA_np, pca_kv_np)
+
+    if pca_ren_c1 != pca_ren_py1:
+        sys.stderr.write(f"kernel_vector_PCA n=1 ren FAIL: C={pca_ren_c1}, py={pca_ren_py1}\n")
+        pca_ok = False
+    if not np.array_equal(pca_vec_c1_np, pca_vec_py1):
+        sys.stderr.write(f"kernel_vector_PCA n=1 vector FAIL: max diff={np.max(np.abs(pca_vec_c1_np - pca_vec_py1))}\n")
+        pca_ok = False
+
+    free_float_pp(pca_PCA_c, pca_nComp)
+    free_double_pp(pca_kv_c, pca_nComp)
+
+    if pca_ok:
+        sys.stderr.write("kernel_vector_PCA PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    return ok
+
+def test_alard_batch2():
+    import sys
+    from pyhotpants.numutils import (kernel_vector_numpy, get_kernel_vec_numpy,
+                                      ludcmp_numpy as ludcmp_numpy_fn,
+                                      xy_conv_stamp_numpy as xy_conv_stamp_numpy_fn,
+                                      xy_conv_stamp_pca_numpy as xy_conv_stamp_pca_numpy_fn,
+                                      build_matrix0_numpy, build_scprod0_numpy,
+                                      make_model_numpy)
+    ok = True
+    np.random.seed(300)
+
+    cdef int fwKernel = 7, hwKernel = 3
+    cdef int fwKSStamp = 7, hwKSStamp = 3
+    cdef int b2ngauss = 1
+    cdef int kerOrder = 1, bgOrder = 1
+    cdef int nKSStamps = 3
+    cdef int b2rPixX = 30, b2rPixY = 30
+
+    deg_fixe_np = np.array([2], dtype=np.int32)
+    sigma_gauss_np = np.array([0.5], dtype=np.float32)
+
+    cdef int b2nCompKer = 0
+    cdef int ig_tmp
+    for ig_tmp in range(b2ngauss):
+        d_tmp = int(deg_fixe_np[ig_tmp])
+        b2nCompKer += (d_tmp + 1) * (d_tmp + 2) // 2
+    cdef int b2nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int b2nVec = b2nCompKer + b2nBGVectors
+    cdef int b2nC = b2nCompKer + b2nBGVectors + 1
+    cdef int fwSq = fwKSStamp * fwKSStamp
+    cdef int kv_total = b2nCompKer * fwKernel
+
+    # ===== 1. kernel_vector =====
+    cdef float *sg_c = numpy_to_float_ptr(sigma_gauss_np)
+    cdef double *fx_c = <double*>calloc(kv_total, sizeof(double))
+    cdef double *fy_c = <double*>calloc(kv_total, sizeof(double))
+    cdef double **kvec_c = <double**>calloc(b2nCompKer, sizeof(double*))
+    cdef int ren_c = 0
+
+    fx_py = np.zeros(kv_total, dtype=np.float64)
+    fy_py = np.zeros(kv_total, dtype=np.float64)
+    kvec_py_list = []
+
+    cdef double *vec0_c = kernel_vector(0, 0, 0, 0, &ren_c, 0, fwKernel, hwKernel, sg_c, fx_c, fy_c, kvec_c, NULL)
+    kvec_c[0] = vec0_c
+    vec0_c_np = double_ptr_to_numpy(vec0_c, fwKernel * fwKernel)
+    fx_c0 = double_ptr_to_numpy(fx_c, kv_total)
+    fy_c0 = double_ptr_to_numpy(fy_c, kv_total)
+
+    vec0_py, ren_py0 = kernel_vector_numpy(0, 0, 0, 0, 0, fwKernel, hwKernel, sigma_gauss_np, fx_py, fy_py, kvec_py_list, None)
+    kvec_py_list.append(vec0_py)
+
+    kv_ok = True
+    if ren_c != ren_py0:
+        sys.stderr.write(f"kernel_vector n=0 ren FAIL: C={ren_c}, py={ren_py0}\n"); kv_ok = False
+    if not np.allclose(vec0_c_np, vec0_py, atol=1e-12):
+        sys.stderr.write(f"kernel_vector n=0 vector FAIL: max diff={np.max(np.abs(vec0_c_np - vec0_py))}\n"); kv_ok = False
+    if not np.allclose(fx_c0, fx_py, atol=1e-12):
+        sys.stderr.write(f"kernel_vector n=0 filter_x FAIL\n"); kv_ok = False
+    if not np.allclose(fy_c0, fy_py, atol=1e-12):
+        sys.stderr.write(f"kernel_vector n=0 filter_y FAIL\n"); kv_ok = False
+
+    cdef int ren_c1 = 0
+    cdef double *vec1_c = kernel_vector(1, 1, 0, 0, &ren_c1, 0, fwKernel, hwKernel, sg_c, fx_c, fy_c, kvec_c, NULL)
+    kvec_c[1] = vec1_c
+    vec1_c_np = double_ptr_to_numpy(vec1_c, fwKernel * fwKernel)
+    fx_c1 = double_ptr_to_numpy(fx_c, kv_total)
+    fy_c1 = double_ptr_to_numpy(fy_c, kv_total)
+
+    vec1_py, ren_py1 = kernel_vector_numpy(1, 1, 0, 0, 0, fwKernel, hwKernel, sigma_gauss_np, fx_py, fy_py, kvec_py_list, None)
+    kvec_py_list.append(vec1_py)
+
+    if ren_c1 != ren_py1:
+        sys.stderr.write(f"kernel_vector n=1 ren FAIL: C={ren_c1}, py={ren_py1}\n"); kv_ok = False
+    if not np.allclose(vec1_c_np, vec1_py, atol=1e-12):
+        sys.stderr.write(f"kernel_vector n=1 vector FAIL: max diff={np.max(np.abs(vec1_c_np - vec1_py))}\n"); kv_ok = False
+    if not np.allclose(fx_c1, fx_py, atol=1e-12):
+        sys.stderr.write(f"kernel_vector n=1 filter_x FAIL\n"); kv_ok = False
+    if not np.allclose(fy_c1, fy_py, atol=1e-12):
+        sys.stderr.write(f"kernel_vector n=1 filter_y FAIL\n"); kv_ok = False
+
+    cdef int kvi
+    for kvi in range(b2nCompKer):
+        if kvec_c[kvi] != NULL:
+            free(kvec_c[kvi])
+    free(kvec_c)
+
+    if kv_ok:
+        sys.stderr.write("kernel_vector PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    # ===== 2. getKernelVec =====
+    cdef double *gkv_fx_c = <double*>calloc(kv_total, sizeof(double))
+    cdef double *gkv_fy_c = <double*>calloc(kv_total, sizeof(double))
+    cdef double **gkv_kvec_c = <double**>calloc(b2nCompKer, sizeof(double*))
+    cdef int *deg_fixe_c = numpy_to_int_ptr(deg_fixe_np)
+
+    getKernelVec(b2ngauss, deg_fixe_c, gkv_kvec_c, 0, fwKernel, hwKernel, sg_c, gkv_fx_c, gkv_fy_c, NULL)
+
+    gkv_fx_py = np.zeros(kv_total, dtype=np.float64)
+    gkv_fy_py = np.zeros(kv_total, dtype=np.float64)
+    gkv_kvec_py = get_kernel_vec_numpy(b2ngauss, deg_fixe_np, 0, fwKernel, hwKernel, sigma_gauss_np, gkv_fx_py, gkv_fy_py, None)
+
+    gkv_ok = True
+    gkv_fx_c_np = double_ptr_to_numpy(gkv_fx_c, kv_total)
+    gkv_fy_c_np = double_ptr_to_numpy(gkv_fy_c, kv_total)
+
+    if not np.allclose(gkv_fx_c_np, gkv_fx_py, atol=1e-12):
+        sys.stderr.write(f"getKernelVec filter_x FAIL: max diff={np.max(np.abs(gkv_fx_c_np - gkv_fx_py))}\n"); gkv_ok = False
+    if not np.allclose(gkv_fy_c_np, gkv_fy_py, atol=1e-12):
+        sys.stderr.write(f"getKernelVec filter_y FAIL: max diff={np.max(np.abs(gkv_fy_c_np - gkv_fy_py))}\n"); gkv_ok = False
+
+    for kvi in range(b2nCompKer):
+        c_vec_gkv = double_ptr_to_numpy(gkv_kvec_c[kvi], fwKernel * fwKernel)
+        if not np.allclose(c_vec_gkv, gkv_kvec_py[kvi], atol=1e-12):
+            sys.stderr.write(f"getKernelVec vec[{kvi}] FAIL: max diff={np.max(np.abs(c_vec_gkv - gkv_kvec_py[kvi]))}\n")
+            gkv_ok = False
+
+    if gkv_ok:
+        sys.stderr.write("getKernelVec PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    # ===== 3. ludcmp =====
+    cdef int lu_n = 8
+    lu_a_np = np.zeros((lu_n + 1, lu_n + 1), dtype=np.float64)
+    lu_a_np[1:lu_n+1, 1:lu_n+1] = np.random.randn(lu_n, lu_n) * 2.0 + np.eye(lu_n) * 10.0
+    lu_a_c_np = lu_a_np.copy()
+    lu_a_py_np = lu_a_np.copy()
+
+    cdef double **lu_a_c = numpy2d_to_double_pp(lu_a_c_np)
+    cdef int *lu_indx_c = <int*>calloc(lu_n + 1, sizeof(int))
+    cdef double lu_d_c = 0.0
+    cdef int lu_rc_c = ludcmp(lu_a_c, lu_n, lu_indx_c, &lu_d_c)
+
+    lu_indx_py = np.zeros(lu_n + 1, dtype=np.int32)
+    lu_rc_py, lu_d_py = ludcmp_numpy_fn(lu_a_py_np, lu_n, lu_indx_py)
+
+    lu_ok = True
+    lu_maxdiff_a = 0.0
+    if lu_rc_c != lu_rc_py:
+        sys.stderr.write(f"ludcmp rc FAIL: C={lu_rc_c}, py={lu_rc_py}\n"); lu_ok = False
+    elif lu_rc_c == 0:
+        lu_a_c_result = double_pp_to_numpy2d(lu_a_c, lu_n + 1, lu_n + 1)
+        lu_indx_c_result = int_ptr_to_numpy(lu_indx_c, lu_n + 1)
+        lu_maxdiff_a = float(np.max(np.abs(lu_a_c_result[1:lu_n+1, 1:lu_n+1] - lu_a_py_np[1:lu_n+1, 1:lu_n+1])))
+        lu_indx_match = np.array_equal(lu_indx_c_result[1:lu_n+1], lu_indx_py[1:lu_n+1].astype(np.int32))
+        if lu_maxdiff_a > 1e-5:
+            sys.stderr.write(f"ludcmp matrix FAIL: max diff={lu_maxdiff_a}\n"); lu_ok = False
+        if not lu_indx_match:
+            sys.stderr.write(f"ludcmp indx FAIL: C={lu_indx_c_result[1:lu_n+1]}, py={lu_indx_py[1:lu_n+1]}\n"); lu_ok = False
+        if abs(lu_d_c - lu_d_py) > 1e-5:
+            sys.stderr.write(f"ludcmp d FAIL: C={lu_d_c}, py={lu_d_py}\n"); lu_ok = False
+
+    free_double_pp(lu_a_c, lu_n + 1)
+    free(lu_indx_c)
+
+    if lu_ok:
+        sys.stderr.write(f"ludcmp PASS (matrix max diff={lu_maxdiff_a:.2e})\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    # ===== 4. xy_conv_stamp =====
+    cdef int xi_center = 15, yi_center = 15
+    image_np = np.random.randn(b2rPixX * b2rPixY).astype(np.float32) * 10 + 100
+    cdef float *xc_image_c = numpy_to_float_ptr(image_np)
+    cdef int sub_width = fwKSStamp + fwKernel - 1
+    cdef float *xc_temp_c = <float*>calloc(sub_width * fwKSStamp, sizeof(float))
+
+    cdef stamp_struct xc_stamp_c
+    memset(&xc_stamp_c, 0, sizeof(stamp_struct))
+    allocateStamps(&xc_stamp_c, 1, bgOrder, b2nCompKer, fwKSStamp, b2nC, nKSStamps)
+    xc_stamp_c.xss[0] = xi_center; xc_stamp_c.yss[0] = yi_center; xc_stamp_c.sscnt = 0
+
+    xc_py = stamp_c_to_dict(&xc_stamp_c, b2nCompKer, b2nBGVectors, fwKSStamp, b2nC, nKSStamps)
+
+    temp_py = np.zeros(sub_width * fwKSStamp, dtype=np.float32)
+
+    xc_ok = True
+    cdef int nvec_xc = 0
+    cdef int idegx_xc, idegy_xc, dx_xc, dy_xc, ren_xc, ig_xc
+    for ig_xc in range(b2ngauss):
+        for idegx_xc in range(int(deg_fixe_np[ig_xc]) + 1):
+            for idegy_xc in range(int(deg_fixe_np[ig_xc]) - idegx_xc + 1):
+                dx_xc = (idegx_xc // 2) * 2 - idegx_xc
+                dy_xc = (idegy_xc // 2) * 2 - idegy_xc
+                ren_xc = 0
+                if dx_xc == 0 and dy_xc == 0 and nvec_xc > 0:
+                    ren_xc = 1
+
+                xy_conv_stamp(&xc_stamp_c, xc_image_c, nvec_xc, ren_xc, 0, fwKSStamp, fwKernel, hwKSStamp, hwKernel, b2rPixX, gkv_fx_c, gkv_fy_c, xc_temp_c, NULL)
+                xy_conv_stamp_numpy_fn(xc_py, image_np, nvec_xc, ren_xc, 0, fwKSStamp, fwKernel, hwKSStamp, hwKernel, b2rPixX, gkv_fx_c_np, gkv_fy_c_np, temp_py, None)
+
+                c_xc_vec = np.array([xc_stamp_c.vectors[nvec_xc][k] for k in range(fwSq)], dtype=np.float64)
+                py_xc_vec = xc_py['vectors'][nvec_xc]
+                if not np.allclose(c_xc_vec, py_xc_vec, atol=1e-6):
+                    sys.stderr.write(f"xy_conv_stamp vec[{nvec_xc}] FAIL: max diff={np.max(np.abs(c_xc_vec - py_xc_vec)):.2e}\n")
+                    xc_ok = False
+                nvec_xc += 1
+
+    if xc_ok:
+        sys.stderr.write("xy_conv_stamp PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    # ===== 5. xy_conv_stamp_PCA =====
+    pca_np = np.random.randn(b2nCompKer, fwKernel * fwKernel).astype(np.float32)
+    cdef float **pca_c = numpy2d_to_float_pp(pca_np)
+
+    cdef stamp_struct xcp_stamp_c
+    memset(&xcp_stamp_c, 0, sizeof(stamp_struct))
+    allocateStamps(&xcp_stamp_c, 1, bgOrder, b2nCompKer, fwKSStamp, b2nC, nKSStamps)
+    xcp_stamp_c.xss[0] = xi_center; xcp_stamp_c.yss[0] = yi_center; xcp_stamp_c.sscnt = 0
+
+    xcp_py = stamp_c_to_dict(&xcp_stamp_c, b2nCompKer, b2nBGVectors, fwKSStamp, b2nC, nKSStamps)
+
+    xcp_ok = True
+    cdef int nvec_xcp = 0
+    cdef int idegx_xcp, idegy_xcp, dx_xcp, dy_xcp, ren_xcp, ig_xcp
+    for ig_xcp in range(b2ngauss):
+        for idegx_xcp in range(int(deg_fixe_np[ig_xcp]) + 1):
+            for idegy_xcp in range(int(deg_fixe_np[ig_xcp]) - idegx_xcp + 1):
+                dx_xcp = (idegx_xcp // 2) * 2 - idegx_xcp
+                dy_xcp = (idegy_xcp // 2) * 2 - idegy_xcp
+                ren_xcp = 0
+                if dx_xcp == 0 and dy_xcp == 0 and nvec_xcp > 0:
+                    ren_xcp = 1
+
+                xy_conv_stamp_PCA(&xcp_stamp_c, xc_image_c, nvec_xcp, ren_xcp, fwKSStamp, hwKSStamp, hwKernel, fwKernel, b2rPixX, pca_c)
+                xy_conv_stamp_pca_numpy_fn(xcp_py, image_np, nvec_xcp, ren_xcp, fwKSStamp, hwKSStamp, hwKernel, fwKernel, b2rPixX, pca_np)
+
+                c_xcp_vec = np.array([xcp_stamp_c.vectors[nvec_xcp][k] for k in range(fwSq)], dtype=np.float64)
+                py_xcp_vec = xcp_py['vectors'][nvec_xcp]
+                if not np.allclose(c_xcp_vec, py_xcp_vec, atol=1e-6):
+                    sys.stderr.write(f"xy_conv_stamp_PCA vec[{nvec_xcp}] FAIL: max diff={np.max(np.abs(c_xcp_vec - py_xcp_vec)):.2e}\n")
+                    xcp_ok = False
+                nvec_xcp += 1
+
+    free_float_pp(pca_c, b2nCompKer)
+
+    if xcp_ok:
+        sys.stderr.write("xy_conv_stamp_PCA PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    # ===== 6. build_matrix0 =====
+    cdef stamp_struct bm_stamp_c
+    memset(&bm_stamp_c, 0, sizeof(stamp_struct))
+    allocateStamps(&bm_stamp_c, 1, bgOrder, b2nCompKer, fwKSStamp, b2nC, nKSStamps)
+    cdef int bm_j, bm_k
+    for bm_j in range(b2nVec):
+        for bm_k in range(fwSq):
+            bm_stamp_c.vectors[bm_j][bm_k] = np.random.randn()
+
+    bm_py = stamp_c_to_dict(&bm_stamp_c, b2nCompKer, b2nBGVectors, fwKSStamp, b2nC, nKSStamps)
+
+    build_matrix0(&bm_stamp_c, b2nCompKer, kerOrder, bgOrder, fwKSStamp)
+    build_matrix0_numpy(bm_py, b2nCompKer, kerOrder, bgOrder, fwKSStamp)
+
+    bm_c_mat = np.zeros((b2nC, b2nC), dtype=np.float64)
+    for bm_j in range(b2nC):
+        for bm_k in range(b2nC):
+            bm_c_mat[bm_j, bm_k] = bm_stamp_c.mat[bm_j][bm_k]
+
+    bm_maxdiff = float(np.max(np.abs(bm_c_mat - bm_py['mat'])))
+    if bm_maxdiff > 1e-10:
+        sys.stderr.write(f"build_matrix0 FAIL: max diff={bm_maxdiff:.2e}\n")
+        ok = False
+    else:
+        sys.stderr.write(f"build_matrix0 PASS (max diff={bm_maxdiff:.2e})\n")
+    sys.stderr.flush()
+
+    # ===== 7. build_scprod0 =====
+    cdef stamp_struct bs0_stamp_c
+    memset(&bs0_stamp_c, 0, sizeof(stamp_struct))
+    allocateStamps(&bs0_stamp_c, 1, bgOrder, b2nCompKer, fwKSStamp, b2nC, nKSStamps)
+    bs0_stamp_c.xss[0] = xi_center; bs0_stamp_c.yss[0] = yi_center; bs0_stamp_c.sscnt = 0
+    cdef int bs0_j, bs0_k
+    for bs0_j in range(b2nVec):
+        for bs0_k in range(fwSq):
+            bs0_stamp_c.vectors[bs0_j][bs0_k] = np.random.randn()
+
+    bs0_py = stamp_c_to_dict(&bs0_stamp_c, b2nCompKer, b2nBGVectors, fwKSStamp, b2nC, nKSStamps)
+
+    bs0_image_np = np.random.randn(b2rPixX * b2rPixY).astype(np.float32) * 10 + 100
+    cdef float *bs0_image_c = numpy_to_float_ptr(bs0_image_np)
+
+    build_scprod0(&bs0_stamp_c, bs0_image_c, b2nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, b2rPixX)
+    build_scprod0_numpy(bs0_py, bs0_image_np, b2nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, b2rPixX)
+
+    bs0_c_scprod = np.array([bs0_stamp_c.scprod[bs0_j] for bs0_j in range(b2nC)], dtype=np.float64)
+    bs0_maxdiff = float(np.max(np.abs(bs0_c_scprod - bs0_py['scprod'])))
+    if bs0_maxdiff > 1e-6:
+        sys.stderr.write(f"build_scprod0 FAIL: max diff={bs0_maxdiff:.2e}\n")
+        ok = False
+    else:
+        sys.stderr.write(f"build_scprod0 PASS (max diff={bs0_maxdiff:.2e})\n")
+    free(bs0_image_c)
+    sys.stderr.flush()
+
+    # ===== 8. make_model =====
+    cdef stamp_struct mm_stamp_c
+    memset(&mm_stamp_c, 0, sizeof(stamp_struct))
+    allocateStamps(&mm_stamp_c, 1, bgOrder, b2nCompKer, fwKSStamp, b2nC, nKSStamps)
+    mm_stamp_c.xss[0] = xi_center; mm_stamp_c.yss[0] = yi_center; mm_stamp_c.sscnt = 0
+    cdef int mm_j, mm_k
+    for mm_j in range(b2nVec):
+        for mm_k in range(fwSq):
+            mm_stamp_c.vectors[mm_j][mm_k] = np.random.randn()
+
+    mm_py = stamp_c_to_dict(&mm_stamp_c, b2nCompKer, b2nBGVectors, fwKSStamp, b2nC, nKSStamps)
+
+    cdef int mm_nTerms = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    cdef int mm_totalKerSol = 2 + (b2nCompKer - 1) * mm_nTerms
+    mm_kerSol_np = np.random.randn(mm_totalKerSol).astype(np.float64)
+    cdef double *mm_kerSol_c = numpy_to_double_ptr(mm_kerSol_np)
+    cdef float *mm_csModel_c = <float*>calloc(fwSq, sizeof(float))
+
+    make_model(&mm_stamp_c, mm_kerSol_c, mm_csModel_c, b2rPixX, b2rPixY, b2nCompKer, kerOrder, fwKSStamp)
+    mm_c_result = float_ptr_to_numpy(mm_csModel_c, fwSq)
+
+    mm_py_result = make_model_numpy(mm_py, mm_kerSol_np, b2rPixX, b2rPixY, b2nCompKer, kerOrder, fwKSStamp)
+
+    mm_maxdiff = float(np.max(np.abs(mm_c_result.astype(np.float64) - mm_py_result.astype(np.float64))))
+    if mm_maxdiff > 1e-4:
+        sys.stderr.write(f"make_model FAIL: max diff={mm_maxdiff:.2e}\n")
+        ok = False
+    else:
+        sys.stderr.write(f"make_model PASS (max diff={mm_maxdiff:.2e})\n")
+
+    free(mm_kerSol_c)
+    free(mm_csModel_c)
+    sys.stderr.flush()
+
+    # ===== cleanup =====
+    freeStampMem(&xc_stamp_c, 1, b2nCompKer, b2nBGVectors, b2nC)
+    freeStampMem(&xcp_stamp_c, 1, b2nCompKer, b2nBGVectors, b2nC)
+    freeStampMem(&bm_stamp_c, 1, b2nCompKer, b2nBGVectors, b2nC)
+    freeStampMem(&bs0_stamp_c, 1, b2nCompKer, b2nBGVectors, b2nC)
+    freeStampMem(&mm_stamp_c, 1, b2nCompKer, b2nBGVectors, b2nC)
+    free(xc_image_c)
+    free(xc_temp_c)
+    for kvi in range(b2nCompKer):
+        if gkv_kvec_c[kvi] != NULL:
+            free(gkv_kvec_c[kvi])
+    free(gkv_kvec_c)
+    free(gkv_fx_c)
+    free(gkv_fy_c)
+    free(deg_fixe_c)
+    free(sg_c)
 
     return ok
