@@ -1,10 +1,145 @@
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free, calloc
-from libc.string cimport memset
+from libc.string cimport memset, strncmp
 import os, struct
 
 np.import_array()
+
+def region_setup_numpy(tmpl_2d, sci_2d, tnoise_2d, inoise_2d, tmask_2d, imask_2d,
+                        ri, rxmins_np, rxmaxs_np, rymins_np, rymaxs_np, nR,
+                        hwKernel, fwStamp, sBorder,
+                        xMin, yMin, xMax, yMax,
+                        fillVal, fillValNoise,
+                        tPedestal, iPedestal,
+                        tGain, tRdnoise, iGain, iRdnoise,
+                        tUThresh, tLThresh, iUThresh, iLThresh,
+                        kfSpreadMask1):
+    import sys
+    rXMin = int(rxmins_np[ri])
+    rXMax = int(rxmaxs_np[ri])
+    rYMin = int(rymins_np[ri])
+    rYMax = int(rymaxs_np[ri])
+
+    fwStamp = int(fwStamp)
+    hwKernel = int(hwKernel)
+    sBorder = int(sBorder)
+    xMin = int(xMin); yMin = int(yMin); xMax = int(xMax); yMax = int(yMax)
+
+    if nR > 1:
+        rXBMin = max(xMin, rXMin - fwStamp // 2)
+        rYBMin = max(yMin, rYMin - fwStamp // 2)
+        rXBMax = min(xMax, rXMax + fwStamp // 2)
+        rYBMax = min(yMax, rYMax + fwStamp // 2)
+    else:
+        rXBMin = max(xMin, rXMin - hwKernel)
+        rYBMin = max(yMin, rYMin - hwKernel)
+        rXBMax = min(xMax, rXMax + hwKernel)
+        rYBMax = min(yMax, rYMax + hwKernel)
+
+    rPixX = rXBMax - rXBMin + 1
+    rPixY = rYBMax - rYBMin + 1
+
+    fillVal_f = np.float32(fillVal)
+    fillValNoise_f = np.float32(fillValNoise)
+
+    tRData_py = np.full((rPixY, rPixX), fillVal_f, dtype=np.float32)
+    iRData_py = np.full((rPixY, rPixX), fillVal_f, dtype=np.float32)
+    oRData_py = np.full((rPixY, rPixX), fillValNoise_f, dtype=np.float32)
+    eRData_py = np.full((rPixY, rPixX), fillValNoise_f, dtype=np.float32)
+    mRData_py = np.zeros((rPixY, rPixX), dtype=np.int32)
+    misRData_py = np.zeros((rPixY, rPixX), dtype=np.int32)
+    mtsRData_py = np.zeros((rPixY, rPixX), dtype=np.int32)
+
+    tRData_py[:, :] = tmpl_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+    iRData_py[:, :] = sci_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+
+    tPedestal_f = np.float32(tPedestal)
+    iPedestal_f = np.float32(iPedestal)
+    if tPedestal_f != 0. or iPedestal_f != 0.:
+        tRData_py -= tPedestal_f
+        iRData_py -= iPedestal_f
+
+    if inoise_2d is not None:
+        oRData_py[:, :] = inoise_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        oRData_py *= oRData_py
+    else:
+        invGain_f = np.float32(1.0 / float(iGain))
+        quad_f = np.float32(float(iRdnoise) / float(iGain))
+        qquad = np.float64(quad_f) * np.float64(quad_f)
+        oRData_py = (np.abs(iRData_py.astype(np.float64)) * np.float64(invGain_f) + qquad).astype(np.float32)
+
+    if tnoise_2d is not None:
+        eRData_py[:, :] = tnoise_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        eRData_py *= eRData_py
+    else:
+        invGain_t = np.float32(1.0 / float(tGain))
+        quad_t = np.float32(float(tRdnoise) / float(tGain))
+        qquad_t = np.float64(quad_t) * np.float64(quad_t)
+        eRData_py = (np.abs(tRData_py.astype(np.float64)) * np.float64(invGain_t) + qquad_t).astype(np.float32)
+
+    oRData_py += eRData_py
+
+    if imask_2d is not None:
+        misRData_py[:, :] = imask_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        misRData_py |= np.int32(0x20) * (misRData_py > 0).astype(np.int32)
+        mRData_py |= misRData_py
+
+    if tmask_2d is not None:
+        mtsRData_py[:, :] = tmask_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        mtsRData_py |= np.int32(0x20) * (mtsRData_py > 0).astype(np.int32)
+        mRData_py |= mtsRData_py
+
+    tUThresh_f = np.float32(tUThresh)
+    tLThresh_f = np.float32(tLThresh)
+    iUThresh_f = np.float32(iUThresh)
+    iLThresh_f = np.float32(iLThresh)
+    mRData_py |= np.int32(0x80 | 0x01) * ((tRData_py == fillVal_f) | (iRData_py == fillVal_f)).astype(np.int32)
+    mRData_py |= np.int32(0x80 | 0x02) * ((tRData_py >= tUThresh_f) | (iRData_py >= iUThresh_f)).astype(np.int32)
+    mRData_py |= np.int32(0x80 | 0x04) * ((tRData_py <= tLThresh_f) | (iRData_py <= iLThresh_f)).astype(np.int32)
+
+    width = int(hwKernel * float(kfSpreadMask1))
+    if width > 0:
+        w2 = width // 2
+        bad = (mRData_py & 0x80) != 0
+        spread = np.zeros((rPixY, rPixX), dtype=np.bool_)
+        for dy in range(-w2, w2 + 1):
+            for dx in range(-w2, w2 + 1):
+                shifted = np.zeros((rPixY, rPixX), dtype=np.bool_)
+                sy1, sy2 = max(0, -dy), min(rPixY, rPixY - dy)
+                dy1_s, dy2_s = max(0, dy), min(rPixY, rPixY + dy)
+                sx1, sx2 = max(0, -dx), min(rPixX, rPixX - dx)
+                dx1_s, dx2_s = max(0, dx), min(rPixX, rPixX + dx)
+                shifted[dy1_s:dy2_s, dx1_s:dx2_s] = bad[sy1:sy2, sx1:sx2]
+                spread |= shifted
+        mRData_py[spread & ~bad] |= np.int32(0x40)
+
+    if sBorder > 0:
+        mRData_py[:, :sBorder] |= np.int32(0x100 | 0x400)
+        mRData_py[:, rPixX-sBorder:] |= np.int32(0x100 | 0x400)
+        mRData_py[:sBorder, sBorder:rPixX-sBorder] |= np.int32(0x100 | 0x400)
+        mRData_py[rPixY-sBorder:, sBorder:rPixX-sBorder] |= np.int32(0x100 | 0x400)
+
+    xBufLo = rXMin - rXBMin
+    xBufHi = rXBMax - rXMax
+    yBufLo = rYMin - rYBMin
+    yBufHi = rYBMax - rYMax
+    fpixelOutX = rXBMin + xBufLo + 1
+    fpixelOutY = rYBMin + yBufLo + 1
+    lpixelOutX = fpixelOutX + (rPixX - xBufHi - xBufLo - 1)
+    lpixelOutY = fpixelOutY + (rPixY - yBufHi - yBufLo - 1)
+
+    return {
+        'tRData': tRData_py, 'iRData': iRData_py,
+        'oRData': oRData_py, 'eRData': eRData_py,
+        'mRData': mRData_py, 'misRData': misRData_py, 'mtsRData': mtsRData_py,
+        'rXMin': rXMin, 'rYMin': rYMin, 'rXMax': rXMax, 'rYMax': rYMax,
+        'rXBMin': rXBMin, 'rYBMin': rYBMin, 'rXBMax': rXBMax, 'rYBMax': rYBMax,
+        'xBufLo': xBufLo, 'xBufHi': xBufHi, 'yBufLo': yBufLo, 'yBufHi': yBufHi,
+        'fpixelOutX': fpixelOutX, 'fpixelOutY': fpixelOutY,
+        'lpixelOutX': lpixelOutX, 'lpixelOutY': lpixelOutY,
+        'rPixX': rPixX, 'rPixY': rPixY,
+    }
 
 def hotpants(
     inim, tmplim,
@@ -242,8 +377,158 @@ def hotpants(
 
     cdef char *localFC = c_str
     cdef int ri
+    cdef region_state rs_tmp
+    cdef int bs_ret
+    cdef int npix
+    cdef region_state rs_c
     for ri in range(nR):
-        hotpants_process_region(&ctx, &prm, ri, &localFC)
+        memset(&rs_tmp, 0, sizeof(region_state))
+
+        # ========== [旧代码 注释掉] region_setup C 主路径 + numpy 影子 ==========
+        # region_setup(&ctx, &prm, ri, &rs_tmp)
+        #
+        # py_shadow = _region_setup_numpy(
+        #     tmpl_arr, sci_arr,
+        #     tni_arr if tni is not None else None,
+        #     ini_arr if ini is not None else None,
+        #     tmi_arr if tmi is not None else None,
+        #     imi_arr if imi is not None else None,
+        #     ri, np.asarray(rxmins), np.asarray(rxmaxs),
+        #     np.asarray(rymins), np.asarray(rymaxs), nR,
+        #     r, ctx.fwStamp, ctx.sBorder,
+        #     ctx.xMin, ctx.yMin, ctx.xMax, ctx.yMax,
+        #     fi, fin,
+        #     tp, ip,
+        #     tg, tr, ig, ir,
+        #     tu, tl, iu, il,
+        #     mins)
+        # npix_shadow = rs_tmp.rPixX * rs_tmp.rPixY
+        # shadow_pairs = [
+        #     ('tRData', np.asarray(<float[:npix_shadow]>rs_tmp.tRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['tRData']),
+        #     ('iRData', np.asarray(<float[:npix_shadow]>rs_tmp.iRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['iRData']),
+        #     ('oRData', np.asarray(<float[:npix_shadow]>rs_tmp.oRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['oRData']),
+        #     ('eRData', np.asarray(<float[:npix_shadow]>rs_tmp.eRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['eRData']),
+        #     ('mRData', np.asarray(<int[:npix_shadow]>rs_tmp.mRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['mRData']),
+        #     ('misRData', np.asarray(<int[:npix_shadow]>rs_tmp.misRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['misRData']),
+        #     ('mtsRData', np.asarray(<int[:npix_shadow]>rs_tmp.mtsRData).reshape(rs_tmp.rPixY, rs_tmp.rPixX).copy(), py_shadow['mtsRData']),
+        # ]
+        # import sys as _sys_shadow
+        # shadow_ok = True
+        # for _sname, _c_arr, _p_arr in shadow_pairs:
+        #     if not np.array_equal(_c_arr, _p_arr):
+        #         shadow_ok = False
+        #         _diff_idx = np.where(_c_arr != _p_arr)
+        #         _ndiff = len(_diff_idx[0])
+        #         _sys_shadow.stderr.write(
+        #             f"  MISMATCH {_sname} region {ri}: {_ndiff} diffs, "
+        #             f"first at ({_diff_idx[0][0]},{_diff_idx[1][0]}): "
+        #             f"C={_c_arr[_diff_idx[0][0],_diff_idx[1][0]]}, "
+        #             f"py={_p_arr[_diff_idx[0][0],_diff_idx[1][0]]}\n")
+        #         _sys_shadow.stderr.flush()
+        # if shadow_ok:
+        #     _sys_shadow.stderr.write(f"  region_setup shadow OK for region {ri}\n")
+        #     _sys_shadow.stderr.flush()
+        # else:
+        #     _sys_shadow.stderr.write(f"  region_setup shadow FAILED for region {ri}\n")
+        #     _sys_shadow.stderr.flush()
+        # ========== [旧代码 结束] ==========
+
+        # ========== numpy 主路径 ==========
+        py = region_setup_numpy(
+            tmpl_arr, sci_arr,
+            tni_arr if tni is not None else None,
+            ini_arr if ini is not None else None,
+            tmi_arr if tmi is not None else None,
+            imi_arr if imi is not None else None,
+            ri, np.asarray(rxmins), np.asarray(rxmaxs),
+            np.asarray(rymins), np.asarray(rymaxs), nR,
+            r, ctx.fwStamp, ctx.sBorder,
+            ctx.xMin, ctx.yMin, ctx.xMax, ctx.yMax,
+            fi, fin,
+            tp, ip,
+            tg, tr, ig, ir,
+            tu, tl, iu, il,
+            mins)
+
+        npix = py['rPixX'] * py['rPixY']
+        rs_tmp.tRData = <float*>malloc(npix * sizeof(float))
+        np.asarray(<float[:npix]>rs_tmp.tRData)[:] = py['tRData'].ravel()
+        rs_tmp.iRData = <float*>malloc(npix * sizeof(float))
+        np.asarray(<float[:npix]>rs_tmp.iRData)[:] = py['iRData'].ravel()
+        rs_tmp.oRData = <float*>malloc(npix * sizeof(float))
+        np.asarray(<float[:npix]>rs_tmp.oRData)[:] = py['oRData'].ravel()
+        rs_tmp.eRData = <float*>malloc(npix * sizeof(float))
+        np.asarray(<float[:npix]>rs_tmp.eRData)[:] = py['eRData'].ravel()
+        rs_tmp.mRData = <int*>malloc(npix * sizeof(int))
+        np.asarray(<int[:npix]>rs_tmp.mRData)[:] = py['mRData'].ravel()
+        rs_tmp.misRData = <int*>malloc(npix * sizeof(int))
+        np.asarray(<int[:npix]>rs_tmp.misRData)[:] = py['misRData'].ravel()
+        rs_tmp.mtsRData = <int*>malloc(npix * sizeof(int))
+        np.asarray(<int[:npix]>rs_tmp.mtsRData)[:] = py['mtsRData'].ravel()
+
+        if strncmp(localFC, b"i", 1) != 0:
+            rs_tmp.ctStamps = <stamp_struct*>calloc(ctx.nStamps, sizeof(stamp_struct))
+            allocateStamps(rs_tmp.ctStamps, ctx.nStamps, prm.bgOrder, ctx.nCompKer, ctx.fwKSStamp, ctx.nC, prm.nKSStamps)
+            rs_tmp.tKerSol = <double*>calloc(ctx.nCompTotal + 1, sizeof(double))
+        if strncmp(localFC, b"t", 1) != 0:
+            rs_tmp.ciStamps = <stamp_struct*>calloc(ctx.nStamps, sizeof(stamp_struct))
+            allocateStamps(rs_tmp.ciStamps, ctx.nStamps, prm.bgOrder, ctx.nCompKer, ctx.fwKSStamp, ctx.nC, prm.nKSStamps)
+            rs_tmp.iKerSol = <double*>calloc(ctx.nCompTotal + 1, sizeof(double))
+
+        rs_tmp.rXMin = py['rXMin']; rs_tmp.rYMin = py['rYMin']
+        rs_tmp.rXMax = py['rXMax']; rs_tmp.rYMax = py['rYMax']
+        rs_tmp.rXBMin = py['rXBMin']; rs_tmp.rYBMin = py['rYBMin']
+        rs_tmp.rXBMax = py['rXBMax']; rs_tmp.rYBMax = py['rYBMax']
+        rs_tmp.xBufLo = py['xBufLo']; rs_tmp.xBufHi = py['xBufHi']
+        rs_tmp.yBufLo = py['yBufLo']; rs_tmp.yBufHi = py['yBufHi']
+        rs_tmp.fpixelOutX = py['fpixelOutX']; rs_tmp.fpixelOutY = py['fpixelOutY']
+        rs_tmp.lpixelOutX = py['lpixelOutX']; rs_tmp.lpixelOutY = py['lpixelOutY']
+        rs_tmp.rPixX = py['rPixX']; rs_tmp.rPixY = py['rPixY']
+        rs_tmp.meansigSubstamps = 0.0; rs_tmp.scatterSubstamps = 0.0
+        rs_tmp.NskippedSubstamps = 0
+
+        # ========== C 影子验证 ==========
+        memset(&rs_c, 0, sizeof(region_state))
+        region_setup(&ctx, &prm, ri, &rs_c)
+
+        import sys
+        shadow_pairs = [
+            ('tRData', np.asarray(<float[:npix]>rs_tmp.tRData).copy(), np.asarray(<float[:npix]>rs_c.tRData).copy()),
+            ('iRData', np.asarray(<float[:npix]>rs_tmp.iRData).copy(), np.asarray(<float[:npix]>rs_c.iRData).copy()),
+            ('oRData', np.asarray(<float[:npix]>rs_tmp.oRData).copy(), np.asarray(<float[:npix]>rs_c.oRData).copy()),
+            ('eRData', np.asarray(<float[:npix]>rs_tmp.eRData).copy(), np.asarray(<float[:npix]>rs_c.eRData).copy()),
+            ('mRData', np.asarray(<int[:npix]>rs_tmp.mRData).copy(), np.asarray(<int[:npix]>rs_c.mRData).copy()),
+            ('misRData', np.asarray(<int[:npix]>rs_tmp.misRData).copy(), np.asarray(<int[:npix]>rs_c.misRData).copy()),
+            ('mtsRData', np.asarray(<int[:npix]>rs_tmp.mtsRData).copy(), np.asarray(<int[:npix]>rs_c.mtsRData).copy()),
+        ]
+        shadow_ok = True
+        for sname, np_arr, c_arr in shadow_pairs:
+            if not np.array_equal(np_arr, c_arr):
+                shadow_ok = False
+                diff_idx = np.where(np_arr != c_arr)
+                ndiff = len(diff_idx[0])
+                sys.stderr.write(
+                    f"  MISMATCH {sname} region {ri}: {ndiff} diffs\n")
+                sys.stderr.flush()
+        if shadow_ok:
+            sys.stderr.write(f"  region_setup numpy-main shadow OK for region {ri}\n")
+            sys.stderr.flush()
+
+        region_cleanup_local(&rs_c, 0)
+
+        # ========== 后续步骤用 rs_tmp（numpy 数据） ==========
+        bs_ret = region_buildstamps(&ctx, &prm, &rs_tmp, localFC)
+        if bs_ret != 0:
+            region_cleanup_local(&rs_tmp, rs_tmp.convTmpl)
+            continue
+
+        region_fit(&ctx, &prm, &rs_tmp, &localFC)
+
+        region_convolve_diff(&ctx, &prm, ri, &rs_tmp, &localFC)
+
+        region_output(&ctx, &prm, ri, &rs_tmp)
+
+        region_cleanup_local(&rs_tmp, rs_tmp.convTmpl)
 
     hotpants_cleanup(&ctx)
 

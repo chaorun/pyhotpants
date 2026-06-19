@@ -1,4 +1,7 @@
 cdef extern from "hotpants_globals.h":
+    ctypedef struct stamp_struct:
+        pass
+
     ctypedef struct savexy_entry:
         int x, y
         int isUsed
@@ -82,6 +85,36 @@ cdef extern from "hotpants_compute.h":
     int hotpants_process_region(hotpants_context *ctx, hotpants_params *p,
         int region_idx, char **localForceConvolve)
 
+    ctypedef struct region_state:
+        float *tRData, *iRData, *oRData, *eRData
+        int *mRData, *misRData, *mtsRData
+        stamp_struct *ctStamps, *ciStamps
+        double *tKerSol, *iKerSol
+        int rXMin, rYMin, rXMax, rYMax
+        int rXBMin, rYBMin, rXBMax, rYBMax
+        int xBufLo, xBufHi, yBufLo, yBufHi
+        int fpixelOutX, fpixelOutY, lpixelOutX, lpixelOutY
+        int rPixX, rPixY
+        int nS, niS, ntS
+        int convTmpl
+        double sumKernel
+        double meansigSubstamps, scatterSubstamps
+        double meansigSubstampsF, scatterSubstampsF
+        int NskippedSubstamps
+        double tMerit, iMerit
+        double inv1
+
+    int region_setup(hotpants_context *ctx, hotpants_params *p, int region_idx, region_state *rs)
+    int region_buildstamps(hotpants_context *ctx, hotpants_params *p, region_state *rs, char *localForceConvolve)
+    int region_fit(hotpants_context *ctx, hotpants_params *p, region_state *rs, char **localForceConvolve)
+    int region_convolve_diff(hotpants_context *ctx, hotpants_params *p, int region_idx, region_state *rs, char **localForceConvolve)
+    void region_output(hotpants_context *ctx, hotpants_params *p, int region_idx, region_state *rs)
+    void region_cleanup_local(region_state *rs, int convTmpl)
+
+cdef extern from "functions.h":
+    int allocateStamps(stamp_struct *, int, int, int, int, int, int)
+
+cdef extern from "hotpants_compute.h":
     int hotpants_compute(
         float *tFullData, long tNx, long tNy,
         float *iFullData, long iNx, long iNy,
