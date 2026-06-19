@@ -1326,8 +1326,8 @@ def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
 
     nsig = 0
     sig1 = 0.0
-    sig2 = 0.0
-    sig3 = 0.0
+    sig2 = -1.0
+    sig3 = -1.0
 
     temp = np.zeros(fwKSStamp * fwKSStamp, dtype=np.float32)
 
@@ -1380,3 +1380,277 @@ def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
                 sig3 = -1.0
 
     return (sig1, sig2, sig3)
+
+
+def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
+                           hwKernel, fwKernel, kernel, kernel_coeffs,
+                           convolveVariance, kerFracMask, mRData,
+                           rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+    dovar = variance is not None
+    vData = None
+    if dovar:
+        vData = np.zeros(xSize * ySize, dtype=np.float32)
+
+    nstepsX = int(math.ceil(float(xSize) / float(kcStep)))
+    nstepsY = int(math.ceil(float(ySize) / float(kcStep)))
+
+    for j1 in range(nstepsY):
+        j0 = j1 * kcStep + hwKernel
+
+        for i1 in range(nstepsX):
+            i0 = i1 * kcStep + hwKernel
+
+            make_kernel_numpy(i0 + hwKernel, j0 + hwKernel, kernelSol, rPixX, rPixY,
+                              nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+
+            for j2 in range(kcStep):
+                j = j0 + j2
+                if j >= ySize - hwKernel:
+                    break
+
+                for i2 in range(kcStep):
+                    i = i0 + i2
+                    if i >= xSize - hwKernel:
+                        break
+
+                    ni = i + xSize * j
+                    qv = 0.0
+                    q = 0.0
+                    aks = 0.0
+                    uks = 0.0
+                    mbit = 0x0
+
+                    for jc in range(j - hwKernel, j + hwKernel + 1):
+                        jk = j - jc + hwKernel
+
+                        for ic in range(i - hwKernel, i + hwKernel + 1):
+                            ik = i - ic + hwKernel
+                            nc = ic + xSize * jc
+                            kk = float(kernel[ik + jk * fwKernel])
+
+                            q += float(image[nc]) * kk
+                            if dovar:
+                                if convolveVariance:
+                                    qv += float(variance[nc]) * kk
+                                else:
+                                    qv += float(variance[nc]) * kk * kk
+
+                            mbit |= int(cMask[nc])
+                            aks += abs(kk)
+                            if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
+                                uks += abs(kk)
+
+                    cRdata[ni] = q
+                    if dovar:
+                        vData[ni] = qv
+
+                    mRData[ni] = int(mRData[ni]) | int(cMask[ni])
+                    mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD * int((int(cMask[ni]) & FLAG_INPUT_ISBAD) > 0))
+
+                    if mbit:
+                        if aks > 0.0 and (uks / aks) < kerFracMask:
+                            mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
+                        else:
+                            mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
+
+    return vData
+
+
+def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgOrder,
+                       nCompTotal, verbose, forceConvolve, figMerit,
+                       kerSigReject, statSig, fwKSStamp, hwKSStamp,
+                       rPixX, rPixY, fwKernel, kernel_vec, mRData):
+    ncomp1 = nCompKer - 1
+    ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    ncomp = ncomp1 * ncomp2
+    nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    mat_size = ncomp1 * ncomp2 + nbg_vec + 1
+
+    ks = np.zeros(nS, dtype=np.float32)
+    nks = 0
+
+    nComps = nCompKer + 1
+
+    for i in range(nS):
+        check_mat = np.zeros((nComps + 1, nComps + 1), dtype=np.float64)
+        check_vec = np.zeros(nComps + 1, dtype=np.float64)
+        indx = np.zeros(nComps + 1, dtype=np.int32)
+
+        for im in range(1, nComps + 1):
+            check_vec[im] = stamps_dicts[i]['scprod'][im]
+            for jm in range(1, im + 1):
+                check_mat[im, jm] = stamps_dicts[i]['mat'][im, jm]
+                check_mat[jm, im] = check_mat[im, jm]
+
+        d = 0.0
+        ludcmp_numpy(check_mat, nComps, indx)
+        lubksb_numpy(check_mat, nComps, indx, check_vec)
+
+        sum_val = check_vec[1]
+        stamps_dicts[i]['norm'] = sum_val
+        ks[nks] = sum_val
+        nks += 1
+
+    kmean, kstdev, sc_rc = sigma_clip_numpy(ks[:nks], maxiter=10, stat_sig=statSig)
+
+    for i in range(nS):
+        stamps_dicts[i]['diff'] = abs((stamps_dicts[i]['norm'] - kmean) / kstdev)
+
+    if forceConvolve[0:1] == "b":
+        ntestStamps = 0
+        for i in range(nS):
+            if stamps_dicts[i]['diff'] < kerSigReject:
+                ntestStamps += 1
+
+        testStamps = []
+        for i in range(nS):
+            if stamps_dicts[i]['diff'] < kerSigReject:
+                testStamps.append(stamps_dicts[i])
+
+        testKerSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+
+        wxy = np.zeros((ntestStamps, ncomp2), dtype=np.float64)
+
+        matrix = build_matrix_numpy(testStamps, ntestStamps, nCompKer, kerOrder, bgOrder,
+                                    fwKSStamp, rPixX, rPixY, verbose, wxy)
+
+        testKerSol = build_scprod_numpy(testStamps, ntestStamps, imRef, nCompKer, kerOrder,
+                                        bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy)
+
+        indx2 = np.zeros(mat_size + 1, dtype=np.int32)
+        ludcmp_numpy(matrix, mat_size, indx2)
+        lubksb_numpy(matrix, mat_size, indx2, testKerSol)
+
+        kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
+        kernel_arr = np.zeros(fwKernel * fwKernel, dtype=np.float64)
+        kmean = make_kernel_numpy(0, 0, testKerSol, rPixX, rPixY, nCompKer, kerOrder,
+                                  fwKernel, kernel_vec, kernel_coeffs, kernel_arr)
+
+        m1 = np.zeros(ntestStamps, dtype=np.float32)
+        m2 = np.zeros(ntestStamps, dtype=np.float32)
+        m3 = np.zeros(ntestStamps, dtype=np.float32)
+        mcnt1 = 0
+        mcnt2 = 0
+        mcnt3 = 0
+
+        for i in range(ntestStamps):
+            sig1, sig2, sig3 = get_stamp_sig_numpy(
+                testStamps[i], testKerSol, imNoise, fwKSStamp, hwKSStamp,
+                rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder)
+
+            if sig1 != -1 and sig1 <= MAXVAL:
+                m1[mcnt1] = sig1
+                mcnt1 += 1
+            if sig2 != -1 and sig2 <= MAXVAL:
+                m2[mcnt2] = sig2
+                mcnt2 += 1
+            if sig3 != -1 and sig3 <= MAXVAL:
+                m3[mcnt3] = sig3
+                mcnt3 += 1
+
+        merit1, sig1sc, rc1 = sigma_clip_numpy(m1[:mcnt1], maxiter=10, stat_sig=statSig)
+        merit2, sig2sc, rc2 = sigma_clip_numpy(m2[:mcnt2], maxiter=10, stat_sig=statSig)
+        merit3, sig3sc, rc3 = sigma_clip_numpy(m3[:mcnt3], maxiter=10, stat_sig=statSig)
+
+        merit1 /= kmean
+        merit2 /= kmean
+        merit3 /= kmean
+
+        if figMerit[0:1] == "v":
+            if mcnt1 > 0:
+                return merit1
+            elif mcnt2 > 0:
+                return merit2
+            elif mcnt3 > 0:
+                return merit3
+            else:
+                return 666.0
+        elif figMerit[0:1] == "s":
+            if mcnt2 > 0:
+                return merit2
+            elif mcnt1 > 0:
+                return merit1
+            elif mcnt3 > 0:
+                return merit3
+            else:
+                return 666.0
+        elif figMerit[0:1] == "h":
+            if mcnt3 > 0:
+                return merit3
+            elif mcnt1 > 0:
+                return merit1
+            elif mcnt2 > 0:
+                return merit2
+            else:
+                return 666.0
+    else:
+        return 0.0
+
+    return 0.0
+
+
+def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
+                      nS, verbose, figMerit, kerSigReject, statSig,
+                      fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+                      nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
+                      hwKernel, fwKernel, usePCA, filter_x, filter_y,
+                      PCA, fillVal):
+    ss = np.zeros(nS, dtype=np.float32)
+    nss = 0
+
+    sig = 0.0
+    check = 0
+    mean = 0.0
+    stdev = 0.0
+    nskippedSubstamps = 0
+
+    for istamp in range(nS):
+        if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
+            sig1, sig2, sig3 = get_stamp_sig_numpy(
+                stamps[istamp], kernelSol, imNoise,
+                fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+                figMerit, statSig, nCompKer, kerOrder, bgOrder)
+
+            if (figMerit[0:1] == "v" and sig1 == -1) or \
+               (figMerit[0:1] == "s" and sig2 == -1) or \
+               (figMerit[0:1] == "h" and sig3 == -1):
+                stamps[istamp]['sscnt'] += 1
+                fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
+                                 ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                                 bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                                 PCA, fillVal, mRData)
+                check = 1
+            else:
+                if figMerit[0:1] == "v":
+                    sig = sig1
+                elif figMerit[0:1] == "s":
+                    sig = sig2
+                elif figMerit[0:1] == "h":
+                    sig = sig3
+
+                stamps[istamp]['chi2'] = sig
+                ss[nss] = sig
+                nss += 1
+        else:
+            nskippedSubstamps += 1
+
+    mean, stdev, retcode = sigma_clip_numpy(ss[:nss].copy(), maxiter=10, stat_sig=statSig)
+
+    meansigSubstamps = mean
+    scatterSubstamps = stdev
+
+    scnt = 0
+    for istamp in range(nS):
+        if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
+            if (stamps[istamp]['chi2'] - mean) > kerSigReject * stdev:
+                stamps[istamp]['sscnt'] += 1
+                rc = fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
+                                      ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                                      bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                                      PCA, fillVal, mRData)
+                scnt += (1 if rc == 0 else 0)
+                check = 1
+            else:
+                scnt += 1
+
+    return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps)

@@ -150,6 +150,7 @@ cdef extern from "functions.h":
     double get_background(int, int, double *, int, int, int, int, int)
     void getFinalStampSig(stamp_struct *, float *, float *, double *, int, int, int, int *)
     double make_kernel(int, int, double *, int, int, int, int, int, double **, double *, double *)
+    void spatial_convolve(float *, float **, int, int, double *, float *, int *, int, int, int, double *, double *, int, float, int *, int, int, int, int, double **)
     void lubksb(double **, int, int *, double *)
     int ludcmp(double **, int, int *, double *)
     double *kernel_vector_PCA(int, int, int, int, int *, int, float **, double **)
@@ -164,6 +165,8 @@ cdef extern from "functions.h":
     void make_model(stamp_struct *, double *, float *, int, int, int, int, int)
     int fillStamp(stamp_struct *, float *, float *, int, int, int, int, int *, int, int, int, int, int, int, int, int, double *, double *, float *, float **, float, int *)
     void getStampSig(stamp_struct *, double *, float *, double *, double *, double *, int, int, int, int, int *, char *, float *, float, int, int, int)
+    double check_stamps(stamp_struct *, int, float *, float *, int, int, int, int, int, int *, double **, double *, double *, char *, char *, float, float, int, int, int, int, int, double **, double *, double *, int *, float *)
+    char check_again(stamp_struct *, double *, float *, float *, float *, double *, double *, int *, int, int, char *, float, float, int, int, int, int, int *, float *, int, int, int, int, int *, int, int, int, double *, double *, float **, float)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(

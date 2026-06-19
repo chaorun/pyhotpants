@@ -2353,3 +2353,511 @@ def test_alard_batch3b():
     free(temp_c3)
 
     return ok
+
+def test_spatial_convolve():
+    import sys
+    from pyhotpants.numutils import spatial_convolve_numpy
+    ok = True
+
+    seeds = [100, 200, 300]
+    dovarList = [0, 1, 1]
+    convvarList = [0, 0, 1]
+
+    cdef int xSize = 40, ySize = 40
+    cdef int hwKernel = 2
+    cdef int fwKernel = 5
+    cdef int nCompKer = 3, kerOrder = 1
+    cdef int kcStep = 5
+    cdef int totalPix = xSize * ySize
+    cdef int rPixX = xSize, rPixY = ySize
+    cdef float kerFracMask = 0.99
+
+    cdef int nTerms = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    cdef int solLen = 2 + (nCompKer - 1) * nTerms
+
+    cdef int seedIdx, dovar, convvar
+    cdef float *imageC
+    cdef float *varC
+    cdef float **varPP
+    cdef float *cRdataC
+    cdef int *cMaskC
+    cdef int *mRDataC
+    cdef double *kernelSolC
+    cdef double *kernelC
+    cdef double *kernelCoeffsC
+    cdef double **kernelVecC
+
+    for seedIdx in range(3):
+        np.random.seed(seeds[seedIdx])
+        dovar = dovarList[seedIdx]
+        convvar = convvarList[seedIdx]
+
+        imageNp = np.random.randn(totalPix).astype(np.float32) * 10 + 100
+        cMaskNp = np.zeros(totalPix, dtype=np.int32)
+        cMaskNp[5 + xSize * 5] = 0x80
+        cMaskNp[20 + xSize * 20] = 0x80
+        cMaskNp[30 + xSize * 15] = 0x20
+
+        mRDataCNp = np.zeros(totalPix, dtype=np.int32)
+        mRDataPyNp = np.zeros(totalPix, dtype=np.int32)
+
+        cRdataCNp = np.zeros(totalPix, dtype=np.float32)
+        cRdataPyNp = np.zeros(totalPix, dtype=np.float32)
+
+        kernelSolNp = np.random.randn(solLen).astype(np.float64)
+        kernelVecNp = np.random.randn(nCompKer, fwKernel * fwKernel).astype(np.float64)
+
+        if dovar:
+            varNp = (np.abs(np.random.randn(totalPix).astype(np.float32)) + 0.5).astype(np.float32)
+        else:
+            varNp = None
+
+        imageC = numpy_to_float_ptr(imageNp)
+        cRdataC = numpy_to_float_ptr(cRdataCNp)
+        cMaskC = numpy_to_int_ptr(cMaskNp)
+        mRDataC = numpy_to_int_ptr(mRDataCNp)
+        kernelSolC = numpy_to_double_ptr(kernelSolNp)
+        kernelC = <double*>calloc(fwKernel * fwKernel, sizeof(double))
+        kernelCoeffsC = <double*>calloc(nCompKer, sizeof(double))
+        kernelVecC = numpy2d_to_double_pp(kernelVecNp)
+
+        if dovar:
+            varC = numpy_to_float_ptr(varNp)
+        else:
+            varC = NULL
+        varPP = &varC
+
+        spatial_convolve(imageC, varPP, xSize, ySize, kernelSolC, cRdataC, cMaskC, kcStep,
+                         hwKernel, fwKernel, kernelC, kernelCoeffsC,
+                         convvar, kerFracMask, mRDataC,
+                         rPixX, rPixY, nCompKer, kerOrder, kernelVecC)
+
+        cRdataCResult = float_ptr_to_numpy(cRdataC, totalPix)
+        mRDataCResult = int_ptr_to_numpy(mRDataC, totalPix)
+
+        varCResult = None
+        if dovar:
+            varCResult = float_ptr_to_numpy(varC, totalPix)
+            free(varC)
+
+        free(imageC)
+        free(cRdataC)
+        free(cMaskC)
+        free(mRDataC)
+        free(kernelSolC)
+        free(kernelC)
+        free(kernelCoeffsC)
+        free_double_pp(kernelVecC, nCompKer)
+
+        kernelPy = np.zeros(fwKernel * fwKernel, dtype=np.float64)
+        kernelCoeffsPy = np.zeros(nCompKer, dtype=np.float64)
+
+        varOutPy = spatial_convolve_numpy(
+            imageNp, varNp, xSize, ySize, kernelSolNp, cRdataPyNp, cMaskNp, kcStep,
+            hwKernel, fwKernel, kernelPy, kernelCoeffsPy,
+            convvar, kerFracMask, mRDataPyNp,
+            rPixX, rPixY, nCompKer, kerOrder, kernelVecNp)
+
+        seedOk = True
+
+        cRdataMaxdiff = float(np.max(np.abs(cRdataCResult.astype(np.float64) - cRdataPyNp.astype(np.float64))))
+        sys.stderr.write(f"  seed={seeds[seedIdx]} cRdata max_diff={cRdataMaxdiff:.2e}")
+        if cRdataMaxdiff > 1e-4:
+            sys.stderr.write(" FAIL\n"); seedOk = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        mRDataEq = np.array_equal(mRDataCResult, mRDataPyNp)
+        if not mRDataEq:
+            ndiff = int(np.sum(mRDataCResult != mRDataPyNp))
+            diffIdx = np.where(mRDataCResult != mRDataPyNp)[0]
+            sys.stderr.write(f"  seed={seeds[seedIdx]} mRData FAIL: {ndiff} diffs, first at {diffIdx[0]}: C=0x{mRDataCResult[diffIdx[0]]:x}, py=0x{mRDataPyNp[diffIdx[0]]:x}\n")
+            seedOk = False
+        else:
+            sys.stderr.write(f"  seed={seeds[seedIdx]} mRData PASS\n")
+
+        if dovar:
+            if varCResult is not None and varOutPy is not None:
+                varMaxdiff = float(np.max(np.abs(varCResult.astype(np.float64) - varOutPy.astype(np.float64))))
+                sys.stderr.write(f"  seed={seeds[seedIdx]} variance max_diff={varMaxdiff:.2e}")
+                if varMaxdiff > 1e-4:
+                    sys.stderr.write(" FAIL\n"); seedOk = False
+                else:
+                    sys.stderr.write(" PASS\n")
+
+        if not seedOk:
+            ok = False
+        sys.stderr.flush()
+
+    return ok
+
+def test_check_stamps():
+    import sys, copy
+    from pyhotpants.numutils import check_stamps_numpy
+
+    seeds = [42, 123, 7]
+    all_ok = True
+
+    cdef int fwKernel = 7, hwKernel = 3
+    cdef int fwKSStamp = 7, hwKSStamp = 3
+    cdef int csngauss = 1
+    cdef int kerOrder = 1, bgOrder = 1
+    cdef int nKSStamps = 3
+    cdef int csrPixX = 60, csrPixY = 60
+    cdef float csfillVal = -999.0
+    cdef float csstatSig = 3.0
+    cdef float cskerSigReject = 2.0
+
+    deg_fixe_np = np.array([2], dtype=np.int32)
+    sigma_gauss_np = np.array([0.5], dtype=np.float32)
+
+    cdef int csnCompKer = 6
+    cdef int csnBGVectors = 3
+    cdef int csnVec = 9
+    cdef int csnC = 10
+    cdef int csfwSq = 49
+    cdef int cstotalPix = 3600
+    cdef int cskv_total = 42
+    cdef int cssub_width = 13
+
+    cdef int csncomp1 = 5
+    cdef int csncomp2 = 3
+    cdef int csncomp = 15
+    cdef int csnbg_vec = 3
+    cdef int csmat_size = 19
+    cdef int csnCompTotal = 19
+    cdef int csnComps = 7
+
+    cdef int *deg_fixe_c = numpy_to_int_ptr(deg_fixe_np)
+    cdef float *sg_c = numpy_to_float_ptr(sigma_gauss_np)
+    cdef double *gkv_fx_c = <double*>calloc(cskv_total, sizeof(double))
+    cdef double *gkv_fy_c = <double*>calloc(cskv_total, sizeof(double))
+    cdef double **gkv_kvec_c = <double**>calloc(csnCompKer, sizeof(double*))
+
+    getKernelVec(csngauss, deg_fixe_c, gkv_kvec_c, 0, fwKernel, hwKernel, sg_c, gkv_fx_c, gkv_fy_c, NULL)
+
+    kv_np = np.zeros((csnCompKer, fwKernel * fwKernel), dtype=np.float64)
+    cdef int kvi_idx
+    for kvi_idx in range(csnCompKer):
+        kv_i = double_ptr_to_numpy(gkv_kvec_c[kvi_idx], fwKernel * fwKernel)
+        kv_np[kvi_idx, :] = kv_i
+
+    cdef float *temp_fill_c = <float*>calloc(cssub_width * fwKSStamp, sizeof(float))
+
+    cdef int seedIdx, si
+    cdef int nS = 6
+    cdef stamp_struct *stamps_c = NULL
+    cdef float *imConv_c = NULL
+    cdef float *imRef_c = NULL
+    cdef float *imNoise_c = NULL
+    cdef float *imRef_c2 = NULL
+    cdef int *mRData_c = NULL
+    cdef int *mRData_c2 = NULL
+    cdef double **check_mat_c = NULL
+    cdef double *check_vec_c = NULL
+    cdef double *check_stack_c = NULL
+    cdef int *indx_c = NULL
+    cdef double *kernel_coeffs_c = NULL
+    cdef double *kernel_c = NULL
+    cdef float *temp_cs_c = NULL
+    cdef double c_merit
+    cdef int xc_pos, yc_pos
+
+    for seedIdx in range(3):
+        np.random.seed(seeds[seedIdx])
+
+        imConv_np = np.random.randn(cstotalPix).astype(np.float32) * 10 + 100
+        imRef_np = np.random.randn(cstotalPix).astype(np.float32) * 10 + 100
+        imNoise_np = (np.abs(np.random.randn(cstotalPix).astype(np.float32)) * 0.5 + 1.0).astype(np.float32)
+        mRData_np = np.zeros(cstotalPix, dtype=np.int32)
+
+        stamps_c = <stamp_struct*>calloc(nS, sizeof(stamp_struct))
+        imConv_c = numpy_to_float_ptr(imConv_np)
+        imRef_c = numpy_to_float_ptr(imRef_np)
+        mRData_c = numpy_to_int_ptr(mRData_np)
+
+        for si in range(nS):
+            allocateStamps(&stamps_c[si], 1, bgOrder, csnCompKer, fwKSStamp, csnC, nKSStamps)
+            xc_pos = 15 + (si % 3) * 12
+            yc_pos = 15 + (si // 3) * 12
+            stamps_c[si].x0 = xc_pos - hwKSStamp - hwKernel - 2
+            stamps_c[si].y0 = yc_pos - hwKSStamp - hwKernel - 2
+            stamps_c[si].nss = 1
+            stamps_c[si].sscnt = 0
+            stamps_c[si].xss[0] = xc_pos
+            stamps_c[si].yss[0] = yc_pos
+
+            fillStamp(&stamps_c[si], imConv_c, imRef_c, csrPixX, csrPixY, 0, csngauss, deg_fixe_c,
+                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, csnCompKer, kerOrder,
+                      0, gkv_fx_c, gkv_fy_c, temp_fill_c, NULL, csfillVal, mRData_c)
+
+        stamp_dicts_py = []
+        for si in range(nS):
+            stamp_dicts_py.append(stamp_c_to_dict(&stamps_c[si], csnCompKer, csnBGVectors, fwKSStamp, csnC, nKSStamps))
+
+        stamp_dicts_py_copy = copy.deepcopy(stamp_dicts_py)
+
+        imRef_c2 = numpy_to_float_ptr(imRef_np)
+        imNoise_c = numpy_to_float_ptr(imNoise_np)
+        mRData_c2 = numpy_to_int_ptr(mRData_np)
+
+        check_mat_c = <double**>malloc((csmat_size + 1) * sizeof(double*))
+        for si in range(csmat_size + 1):
+            check_mat_c[si] = <double*>calloc(csmat_size + 1, sizeof(double))
+
+        check_vec_c = <double*>calloc(csmat_size + 1, sizeof(double))
+        check_stack_c = <double*>calloc(nS, sizeof(double))
+        indx_c = <int*>calloc(csmat_size + 1, sizeof(int))
+        kernel_coeffs_c = <double*>calloc(csnCompKer, sizeof(double))
+        kernel_c = <double*>calloc(fwKernel * fwKernel, sizeof(double))
+        temp_cs_c = <float*>calloc(csfwSq, sizeof(float))
+
+        c_merit = check_stamps(stamps_c, nS, imRef_c2, imNoise_c,
+                               csnCompKer, kerOrder, bgOrder, csnCompTotal, 0,
+                               indx_c, check_mat_c, check_vec_c, check_stack_c,
+                               b"b", b"v", cskerSigReject, csstatSig,
+                               fwKSStamp, hwKSStamp, csrPixX, csrPixY, fwKernel,
+                               gkv_kvec_c, kernel_coeffs_c, kernel_c,
+                               mRData_c2, temp_cs_c)
+
+        mRData_py2 = mRData_np.copy()
+        py_merit = check_stamps_numpy(stamp_dicts_py_copy, nS, imRef_np, imNoise_np,
+                                      csnCompKer, kerOrder, bgOrder, csnCompTotal, 0,
+                                      "b", "v", float(cskerSigReject), float(csstatSig),
+                                      fwKSStamp, hwKSStamp, csrPixX, csrPixY, fwKernel,
+                                      kv_np, mRData_py2)
+
+        merit_diff = abs(c_merit - py_merit)
+        merit_denom = max(abs(c_merit), 1e-30)
+        merit_rel = merit_diff / merit_denom
+        sys.stderr.write(f"  seed={seeds[seedIdx]} merit C={c_merit:.6e} py={py_merit:.6e} diff={merit_diff:.2e} rel={merit_rel:.2e}")
+        if merit_rel > 1e-5:
+            sys.stderr.write(" FAIL\n")
+            all_ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        norm_maxrel = 0.0
+        diff_maxrel = 0.0
+        for si in range(nS):
+            c_norm_val = stamps_c[si].norm
+            c_diff_val = stamps_c[si].diff
+            py_norm_val = stamp_dicts_py_copy[si]['norm']
+            py_diff_val = stamp_dicts_py_copy[si]['diff']
+            nd = max(abs(c_norm_val), 1e-30)
+            dd = max(abs(c_diff_val), 1e-30)
+            norm_maxrel = max(norm_maxrel, abs(c_norm_val - py_norm_val) / nd)
+            diff_maxrel = max(diff_maxrel, abs(c_diff_val - py_diff_val) / dd)
+
+        sys.stderr.write(f"  seed={seeds[seedIdx]} norm max_reldiff={norm_maxrel:.2e} diff max_reldiff={diff_maxrel:.2e}")
+        if norm_maxrel > 1e-5 or diff_maxrel > 1e-5:
+            sys.stderr.write(" FAIL\n")
+            all_ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        free(imConv_c); free(imRef_c); free(mRData_c)
+        free(imRef_c2); free(imNoise_c); free(mRData_c2)
+        for si in range(csmat_size + 1):
+            free(check_mat_c[si])
+        free(check_mat_c)
+        free(check_vec_c); free(check_stack_c); free(indx_c)
+        free(kernel_coeffs_c); free(kernel_c); free(temp_cs_c)
+        for si in range(nS):
+            freeStampMem(&stamps_c[si], 1, csnCompKer, csnBGVectors, csnC)
+        free(stamps_c)
+
+        sys.stderr.flush()
+
+    for kvi_idx in range(csnCompKer):
+        if gkv_kvec_c[kvi_idx] != NULL:
+            free(gkv_kvec_c[kvi_idx])
+    free(gkv_kvec_c)
+    free(gkv_fx_c); free(gkv_fy_c)
+    free(deg_fixe_c); free(sg_c)
+    free(temp_fill_c)
+
+    return all_ok
+
+def test_check_again():
+    import sys
+    from pyhotpants.numutils import check_again_numpy
+    ok = True
+    seeds = [600, 601, 602]
+
+    cdef int fwKernel = 7, hwKernel = 3
+    cdef int fwKSStamp = 7, hwKSStamp = 3
+    cdef int ca_ngauss = 1
+    cdef int kerOrder = 1, bgOrder = 1
+    cdef int nKSStamps = 3
+    cdef int ca_rPixX = 60, ca_rPixY = 60
+    cdef int ca_usePCA = 0
+    cdef float ca_fillVal = -999.0
+    cdef float ca_statSig = 3.0
+    cdef float ca_kerSigReject = 2.0
+    cdef int nS = 5
+
+    deg_fixe_np = np.array([2], dtype=np.int32)
+    sigma_gauss_np = np.array([0.5], dtype=np.float32)
+
+    cdef int ca_nCompKer = 0
+    cdef int ig_ca
+    for ig_ca in range(ca_ngauss):
+        ca_nCompKer += (int(deg_fixe_np[ig_ca]) + 1) * (int(deg_fixe_np[ig_ca]) + 2) // 2
+    cdef int ca_nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int ca_nVec = ca_nCompKer + ca_nBGVectors
+    cdef int ca_nC = ca_nCompKer + ca_nBGVectors + 1
+    cdef int ca_fwSq = fwKSStamp * fwKSStamp
+    cdef int ca_totalPix = ca_rPixX * ca_rPixY
+    cdef int ca_kv_total = ca_nCompKer * fwKernel
+    cdef int ca_sub_width = fwKSStamp + fwKernel - 1
+    cdef int ca_nTerms = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    cdef int ca_ncompBG = (ca_nCompKer - 1) * ca_nTerms + 1
+    cdef int ca_solSize = ca_ncompBG + ca_nBGVectors + 2
+
+    cdef int *deg_fixe_ca = numpy_to_int_ptr(deg_fixe_np)
+    cdef float *sg_ca = numpy_to_float_ptr(sigma_gauss_np)
+    cdef double *fx_ca = <double*>calloc(ca_kv_total, sizeof(double))
+    cdef double *fy_ca = <double*>calloc(ca_kv_total, sizeof(double))
+    cdef double **kvec_ca = <double**>calloc(ca_nCompKer, sizeof(double*))
+    getKernelVec(ca_ngauss, deg_fixe_ca, kvec_ca, 0, fwKernel, hwKernel, sg_ca, fx_ca, fy_ca, NULL)
+    fx_np = double_ptr_to_numpy(fx_ca, ca_kv_total)
+    fy_np = double_ptr_to_numpy(fy_ca, ca_kv_total)
+
+    cdef float *temp_ca = <float*>calloc(ca_sub_width * fwKSStamp, sizeof(float))
+
+    cdef int seedIdx_ca, si_ca, sj_ca, kvi_ca
+    cdef float *imConv_ca
+    cdef float *imRef_ca
+    cdef float *imNoise_ca
+    cdef float *imConv_ca2
+    cdef float *imRef_ca2
+    cdef int *mRData_ca
+    cdef int *mRData_ca2
+    cdef stamp_struct *stamps_c1
+    cdef double *kernelSol_ca
+    cdef double meansig_c, scatter_c
+    cdef int nskipped_c
+    cdef char c_check
+
+    stamp_positions = [
+        (15, 15), (30, 15), (45, 15), (15, 35), (30, 35)
+    ]
+
+    for seedIdx_ca in range(3):
+        np.random.seed(seeds[seedIdx_ca])
+
+        imConv_np = np.random.randn(ca_totalPix).astype(np.float32) * 10 + 100
+        imRef_np = np.random.randn(ca_totalPix).astype(np.float32) * 10 + 100
+        imNoise_np = (np.abs(np.random.randn(ca_totalPix).astype(np.float32)) * 0.5 + 1.0).astype(np.float32)
+        mRData_np = np.zeros(ca_totalPix, dtype=np.int32)
+
+        stamps_c1 = <stamp_struct*>calloc(nS, sizeof(stamp_struct))
+        imConv_ca = numpy_to_float_ptr(imConv_np)
+        imRef_ca = numpy_to_float_ptr(imRef_np)
+        mRData_ca = numpy_to_int_ptr(mRData_np)
+
+        for si_ca in range(nS):
+            allocateStamps(&stamps_c1[si_ca], 1, bgOrder, ca_nCompKer, fwKSStamp, ca_nC, nKSStamps)
+            stamps_c1[si_ca].x0 = stamp_positions[si_ca][0] - hwKSStamp - hwKernel
+            stamps_c1[si_ca].y0 = stamp_positions[si_ca][1] - hwKSStamp - hwKernel
+            stamps_c1[si_ca].x = stamp_positions[si_ca][0]
+            stamps_c1[si_ca].y = stamp_positions[si_ca][1]
+            stamps_c1[si_ca].nx = fwKSStamp + fwKernel - 1
+            stamps_c1[si_ca].ny = fwKSStamp + fwKernel - 1
+            stamps_c1[si_ca].nss = nKSStamps
+            stamps_c1[si_ca].sscnt = 0
+            for sj_ca in range(nKSStamps):
+                stamps_c1[si_ca].xss[sj_ca] = stamp_positions[si_ca][0] + sj_ca * 2
+                stamps_c1[si_ca].yss[sj_ca] = stamp_positions[si_ca][1] + sj_ca * 2
+            fillStamp(&stamps_c1[si_ca], imConv_ca, imRef_ca, ca_rPixX, ca_rPixY, 0,
+                       ca_ngauss, deg_fixe_ca, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                       bgOrder, ca_nCompKer, kerOrder, ca_usePCA, fx_ca, fy_ca, temp_ca, NULL, ca_fillVal, mRData_ca)
+
+        stamps_c1[2].sscnt = stamps_c1[2].nss
+
+        kernelSol_np = np.random.randn(ca_solSize).astype(np.float64)
+
+        py_stamps = []
+        for si_ca in range(nS):
+            py_stamps.append(stamp_c_to_dict(&stamps_c1[si_ca], ca_nCompKer, ca_nBGVectors, fwKSStamp, ca_nC, nKSStamps))
+
+        mRData_py_np = int_ptr_to_numpy(mRData_ca, ca_totalPix).copy()
+        mRData_ca2 = numpy_to_int_ptr(mRData_py_np)
+
+        kernelSol_ca = numpy_to_double_ptr(kernelSol_np)
+        imNoise_ca = numpy_to_float_ptr(imNoise_np)
+        imConv_ca2 = numpy_to_float_ptr(imConv_np)
+        imRef_ca2 = numpy_to_float_ptr(imRef_np)
+
+        meansig_c = 0; scatter_c = 0; nskipped_c = 0
+        c_check = check_again(stamps_c1, kernelSol_ca, imConv_ca2, imRef_ca2, imNoise_ca,
+                              &meansig_c, &scatter_c, &nskipped_c,
+                              nS, 0, b"v", ca_kerSigReject, ca_statSig,
+                              fwKSStamp, hwKSStamp, ca_rPixX, ca_rPixY,
+                              mRData_ca, temp_ca, ca_nCompKer, kerOrder, bgOrder,
+                              ca_ngauss, deg_fixe_ca, hwKernel, fwKernel,
+                              ca_usePCA, fx_ca, fy_ca, NULL, ca_fillVal)
+
+        py_check, py_meansig, py_scatter, py_nskipped = check_again_numpy(
+            py_stamps, kernelSol_np, imConv_np, imRef_np, imNoise_np,
+            nS, 0, "v", float(ca_kerSigReject), float(ca_statSig),
+            fwKSStamp, hwKSStamp, ca_rPixX, ca_rPixY, mRData_py_np,
+            ca_nCompKer, kerOrder, bgOrder, ca_ngauss, deg_fixe_np,
+            hwKernel, fwKernel, ca_usePCA, fx_np, fy_np, None, float(ca_fillVal))
+
+        seed_ok = True
+
+        if int(c_check) != py_check:
+            sys.stderr.write(f"  seed={seeds[seedIdx_ca]} check FAIL: C={int(c_check)}, py={py_check}\n")
+            seed_ok = False
+
+        meansig_diff = abs(meansig_c - py_meansig)
+        meansig_reldiff = meansig_diff / max(abs(meansig_c), 1.0)
+        if meansig_reldiff > 1e-6:
+            sys.stderr.write(f"  seed={seeds[seedIdx_ca]} meansig FAIL: C={meansig_c:.6e}, py={py_meansig:.6e}, diff={meansig_diff:.2e}, rel={meansig_reldiff:.2e}\n")
+            seed_ok = False
+
+        scatter_diff = abs(scatter_c - py_scatter)
+        scatter_reldiff = scatter_diff / max(abs(scatter_c), 1.0)
+        if scatter_reldiff > 1e-6:
+            sys.stderr.write(f"  seed={seeds[seedIdx_ca]} scatter FAIL: C={scatter_c:.6e}, py={py_scatter:.6e}, diff={scatter_diff:.2e}, rel={scatter_reldiff:.2e}\n")
+            seed_ok = False
+
+        if nskipped_c != py_nskipped:
+            sys.stderr.write(f"  seed={seeds[seedIdx_ca]} nskipped FAIL: C={nskipped_c}, py={py_nskipped}\n")
+            seed_ok = False
+
+        for si_ca in range(nS):
+            c_dict = stamp_c_to_dict(&stamps_c1[si_ca], ca_nCompKer, ca_nBGVectors, fwKSStamp, ca_nC, nKSStamps)
+            if c_dict['sscnt'] != py_stamps[si_ca]['sscnt']:
+                sys.stderr.write(f"  seed={seeds[seedIdx_ca]} stamp[{si_ca}].sscnt FAIL: C={c_dict['sscnt']}, py={py_stamps[si_ca]['sscnt']}\n")
+                seed_ok = False
+            chi2_diff = abs(c_dict['chi2'] - py_stamps[si_ca]['chi2'])
+            chi2_reldiff = chi2_diff / max(abs(c_dict['chi2']), 1.0)
+            if chi2_reldiff > 1e-6:
+                sys.stderr.write(f"  seed={seeds[seedIdx_ca]} stamp[{si_ca}].chi2 FAIL: C={c_dict['chi2']:.6e}, py={py_stamps[si_ca]['chi2']:.6e}, diff={chi2_diff:.2e}, rel={chi2_reldiff:.2e}\n")
+                seed_ok = False
+
+        if seed_ok:
+            sys.stderr.write(f"  seed={seeds[seedIdx_ca]} check_again PASS (check={int(c_check)}, meansig={meansig_c:.6f}, scatter={scatter_c:.6f}, nskipped={nskipped_c})\n")
+        else:
+            ok = False
+
+        sys.stderr.flush()
+
+        free(kernelSol_ca); free(imNoise_ca)
+        free(imConv_ca2); free(imRef_ca2)
+        free(mRData_ca2)
+        free(imConv_ca); free(imRef_ca); free(mRData_ca)
+        for si_ca in range(nS):
+            freeStampMem(&stamps_c1[si_ca], 1, ca_nCompKer, ca_nBGVectors, ca_nC)
+        free(stamps_c1)
+
+    for kvi_ca in range(ca_nCompKer):
+        if kvec_ca[kvi_ca] != NULL:
+            free(kvec_ca[kvi_ca])
+    free(kvec_ca); free(fx_ca); free(fy_ca)
+    free(deg_fixe_ca); free(sg_ca); free(temp_ca)
+
+    return ok
