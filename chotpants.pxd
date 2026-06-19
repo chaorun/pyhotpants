@@ -159,7 +159,11 @@ cdef extern from "functions.h":
     void xy_conv_stamp_PCA(stamp_struct *, float *, int, int, int, int, int, int, int, float **)
     void build_matrix0(stamp_struct *, int, int, int, int)
     void build_scprod0(stamp_struct *, float *, int, int, int, int, int, int)
+    void build_matrix(stamp_struct *, int, double **, int, int, int, int, int, int, int, double **)
+    void build_scprod(stamp_struct *, int, float *, double *, int, int, int, int, int, int, double **)
     void make_model(stamp_struct *, double *, float *, int, int, int, int, int)
+    int fillStamp(stamp_struct *, float *, float *, int, int, int, int, int *, int, int, int, int, int, int, int, int, double *, double *, float *, float **, float, int *)
+    void getStampSig(stamp_struct *, double *, float *, double *, double *, double *, int, int, int, int, int *, char *, float *, float, int, int, int)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(

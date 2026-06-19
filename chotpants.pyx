@@ -2008,3 +2008,348 @@ def test_alard_batch2():
     free(sg_c)
 
     return ok
+
+def test_alard_batch3a():
+    import sys
+    from pyhotpants.numutils import build_matrix_numpy, build_scprod_numpy
+    ok = True
+
+    seeds = [400, 401, 402]
+
+    cdef int nCompKer = 4
+    cdef int kerOrder = 2
+    cdef int bgOrder = 1
+    cdef int fwKSStamp = 7, hwKSStamp = 3
+    cdef int rPixX = 200, rPixY = 200
+    cdef int nS = 5
+    cdef int nKSStamps = 3
+    cdef int nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int nC = nCompKer + nBGVectors + 1
+    cdef int nVec = nCompKer + nBGVectors
+    cdef int fwSq = fwKSStamp * fwKSStamp
+    cdef int ncomp1 = nCompKer - 1
+    cdef int ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    cdef int ncomp = ncomp1 * ncomp2
+    cdef int nbg_vec = nBGVectors
+    cdef int mat_size = ncomp + nbg_vec + 1
+    cdef int totalPix = rPixX * rPixY
+    cdef int solSize = ncomp + nbg_vec + 2
+
+    cdef int si, sj, sk, seedIdx
+    cdef stamp_struct *stamps_c
+    cdef float *image_c
+    cdef double **matrix_c
+    cdef double **wxy_c
+    cdef double *kernelSol_c
+
+    for seedIdx in range(3):
+        np.random.seed(seeds[seedIdx])
+
+        stamps_c = <stamp_struct*>calloc(nS, sizeof(stamp_struct))
+        for si in range(nS):
+            allocateStamps(&stamps_c[si], 1, bgOrder, nCompKer, fwKSStamp, nC, nKSStamps)
+            for sj in range(nKSStamps):
+                stamps_c[si].xss[sj] = 30 + int(np.random.randint(0, 140))
+                stamps_c[si].yss[sj] = 30 + int(np.random.randint(0, 140))
+            stamps_c[si].nss = nKSStamps
+            stamps_c[si].sscnt = 0
+            for sj in range(nVec):
+                for sk in range(fwSq):
+                    stamps_c[si].vectors[sj][sk] = np.random.randn()
+            for sj in range(nC):
+                for sk in range(nC):
+                    stamps_c[si].mat[sj][sk] = np.random.randn()
+            for sj in range(nC):
+                stamps_c[si].scprod[sj] = np.random.randn()
+
+        stamps_c[1].sscnt = stamps_c[1].nss
+
+        image_np = np.random.randn(totalPix).astype(np.float32) * 10 + 100
+        image_c = numpy_to_float_ptr(image_np)
+
+        matrix_c = <double**>malloc((mat_size + 1) * sizeof(double*))
+        for si in range(mat_size + 1):
+            matrix_c[si] = <double*>calloc(mat_size + 1, sizeof(double))
+
+        wxy_c = <double**>malloc(nS * sizeof(double*))
+        for si in range(nS):
+            wxy_c[si] = <double*>calloc(ncomp2, sizeof(double))
+
+        build_matrix(stamps_c, nS, matrix_c, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, 0, wxy_c)
+
+        c_matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
+        for si in range(mat_size + 1):
+            for sj in range(mat_size + 1):
+                c_matrix[si, sj] = matrix_c[si][sj]
+
+        c_wxy = np.zeros((nS, ncomp2), dtype=np.float64)
+        for si in range(nS):
+            for sj in range(ncomp2):
+                c_wxy[si, sj] = wxy_c[si][sj]
+
+        stamps_dicts = []
+        for si in range(nS):
+            stamps_dicts.append(stamp_c_to_dict(&stamps_c[si], nCompKer, nBGVectors, fwKSStamp, nC, nKSStamps))
+
+        py_wxy = np.zeros((nS, ncomp2), dtype=np.float64)
+        py_matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, 0, py_wxy)
+
+        mat_maxdiff = float(np.max(np.abs(c_matrix - py_matrix)))
+        sys.stderr.write(f"  seed={seeds[seedIdx]} build_matrix max_diff={mat_maxdiff:.2e}")
+        if mat_maxdiff > 1e-10:
+            sys.stderr.write(" FAIL\n")
+            ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        wxy_maxdiff = float(np.max(np.abs(c_wxy - py_wxy)))
+        sys.stderr.write(f"  seed={seeds[seedIdx]} wxy max_diff={wxy_maxdiff:.2e}")
+        if wxy_maxdiff > 1e-10:
+            sys.stderr.write(" FAIL\n")
+            ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        kernelSol_c = <double*>calloc(solSize, sizeof(double))
+        build_scprod(stamps_c, nS, image_c, kernelSol_c, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy_c)
+        c_kernelSol = double_ptr_to_numpy(kernelSol_c, solSize)
+
+        py_kernelSol = build_scprod_numpy(stamps_dicts, nS, image_np, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, py_wxy)
+
+        sp_maxdiff = float(np.max(np.abs(c_kernelSol - py_kernelSol)))
+        sys.stderr.write(f"  seed={seeds[seedIdx]} build_scprod max_diff={sp_maxdiff:.2e}")
+        if sp_maxdiff > 1e-6:
+            sys.stderr.write(" FAIL\n")
+            ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        sys.stderr.flush()
+
+        free(kernelSol_c)
+        free(image_c)
+        for si in range(mat_size + 1):
+            free(matrix_c[si])
+        free(matrix_c)
+        for si in range(nS):
+            free(wxy_c[si])
+        free(wxy_c)
+        for si in range(nS):
+            freeStampMem(&stamps_c[si], 1, nCompKer, nBGVectors, nC)
+        free(stamps_c)
+
+    return ok
+
+def test_alard_batch3b():
+    import sys
+    from pyhotpants.numutils import fill_stamp_numpy, get_stamp_sig_numpy
+    ok = True
+    seeds = [500, 501, 502]
+
+    cdef int fwKernel = 7, hwKernel = 3
+    cdef int fwKSStamp = 7, hwKSStamp = 3
+    cdef int b3ngauss = 1
+    cdef int kerOrder = 1, bgOrder = 1
+    cdef int nKSStamps = 3
+    cdef int b3rPixX = 60, b3rPixY = 60
+    cdef int b3usePCA = 0
+    cdef float b3fillVal = -999.0
+    cdef float b3statSig = 3.0
+
+    deg_fixe_np = np.array([2], dtype=np.int32)
+    sigma_gauss_np = np.array([0.5], dtype=np.float32)
+
+    cdef int b3nCompKer = 0
+    cdef int ig_tmp3
+    for ig_tmp3 in range(b3ngauss):
+        b3nCompKer += (int(deg_fixe_np[ig_tmp3]) + 1) * (int(deg_fixe_np[ig_tmp3]) + 2) // 2
+    cdef int b3nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int b3nVec = b3nCompKer + b3nBGVectors
+    cdef int b3nC = b3nCompKer + b3nBGVectors + 1
+    cdef int b3fwSq = fwKSStamp * fwKSStamp
+    cdef int b3totalPix = b3rPixX * b3rPixY
+    cdef int b3kv_total = b3nCompKer * fwKernel
+    cdef int b3sub_width = fwKSStamp + fwKernel - 1
+    cdef int b3nTerms = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    cdef int b3ncompBG = (b3nCompKer - 1) * b3nTerms + 1
+    cdef int b3solSize = b3ncompBG + b3nBGVectors + 2
+
+    cdef int *deg_fixe_c3 = numpy_to_int_ptr(deg_fixe_np)
+    cdef float *sg_c3 = numpy_to_float_ptr(sigma_gauss_np)
+    cdef double *gkv_fx_c3 = <double*>calloc(b3kv_total, sizeof(double))
+    cdef double *gkv_fy_c3 = <double*>calloc(b3kv_total, sizeof(double))
+    cdef double **gkv_kvec_c3 = <double**>calloc(b3nCompKer, sizeof(double*))
+
+    getKernelVec(b3ngauss, deg_fixe_c3, gkv_kvec_c3, 0, fwKernel, hwKernel, sg_c3, gkv_fx_c3, gkv_fy_c3, NULL)
+
+    gkv_fx_np3 = double_ptr_to_numpy(gkv_fx_c3, b3kv_total)
+    gkv_fy_np3 = double_ptr_to_numpy(gkv_fy_c3, b3kv_total)
+
+    cdef float *temp_c3 = <float*>calloc(b3sub_width * fwKSStamp, sizeof(float))
+
+    cdef int seedIdx3, kvi3
+    cdef float *imConv_c3
+    cdef float *imRef_c3
+    cdef int *mRData_c3
+    cdef stamp_struct fs_stamp_c3
+    cdef int fs_rc_c3
+    cdef double *kernelSol_c3
+    cdef float *imNoise_c3
+    cdef int *mRData_sig_c3
+    cdef int *mRData_sig_c3b
+    cdef double sig1_c3, sig2_c3, sig3_c3
+    cdef double sig1_c3b, sig2_c3b, sig3_c3b
+    cdef float *temp_sig_c3
+    cdef float *temp_sig_c3b
+
+    for seedIdx3 in range(3):
+        np.random.seed(seeds[seedIdx3])
+
+        imConv_np3 = np.random.randn(b3totalPix).astype(np.float32) * 10 + 100
+        imRef_np3 = np.random.randn(b3totalPix).astype(np.float32) * 10 + 100
+        mRData_np3 = np.zeros(b3totalPix, dtype=np.int32)
+
+        imConv_c3 = numpy_to_float_ptr(imConv_np3)
+        imRef_c3 = numpy_to_float_ptr(imRef_np3)
+        mRData_c3 = numpy_to_int_ptr(mRData_np3)
+
+        memset(&fs_stamp_c3, 0, sizeof(stamp_struct))
+        allocateStamps(&fs_stamp_c3, 1, bgOrder, b3nCompKer, fwKSStamp, b3nC, nKSStamps)
+        fs_stamp_c3.x0 = 20; fs_stamp_c3.y0 = 20
+        fs_stamp_c3.x = 30; fs_stamp_c3.y = 30
+        fs_stamp_c3.nx = 20; fs_stamp_c3.ny = 20
+        fs_stamp_c3.nss = nKSStamps; fs_stamp_c3.sscnt = 0
+        fs_stamp_c3.xss[0] = 30; fs_stamp_c3.yss[0] = 30
+        fs_stamp_c3.xss[1] = 32; fs_stamp_c3.yss[1] = 32
+        fs_stamp_c3.xss[2] = 28; fs_stamp_c3.yss[2] = 28
+
+        fs_py3 = stamp_c_to_dict(&fs_stamp_c3, b3nCompKer, b3nBGVectors, fwKSStamp, b3nC, nKSStamps)
+        mRData_py3 = mRData_np3.copy()
+
+        fs_rc_c3 = fillStamp(&fs_stamp_c3, imConv_c3, imRef_c3, b3rPixX, b3rPixY, 0, b3ngauss, deg_fixe_c3,
+                             hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, b3nCompKer, kerOrder,
+                             b3usePCA, gkv_fx_c3, gkv_fy_c3, temp_c3, NULL, b3fillVal, mRData_c3)
+
+        fs_rc_py3 = fill_stamp_numpy(fs_py3, imConv_np3, imRef_np3, b3rPixX, b3rPixY, 0, b3ngauss, deg_fixe_np,
+                                     hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, b3nCompKer, kerOrder,
+                                     b3usePCA, gkv_fx_np3, gkv_fy_np3, None, b3fillVal, mRData_py3)
+
+        if fs_rc_c3 != fs_rc_py3:
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} fillStamp rc FAIL: C={fs_rc_c3}, py={fs_rc_py3}\n")
+            ok = False
+            free(imConv_c3); free(imRef_c3); free(mRData_c3)
+            freeStampMem(&fs_stamp_c3, 1, b3nCompKer, b3nBGVectors, b3nC)
+            continue
+
+        if fs_rc_c3 == 0:
+            fs_c_dict3 = stamp_c_to_dict(&fs_stamp_c3, b3nCompKer, b3nBGVectors, fwKSStamp, b3nC, nKSStamps)
+
+            vec_maxdiff3 = float(np.max(np.abs(fs_c_dict3['vectors'] - fs_py3['vectors'])))
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} fillStamp vectors max_diff={vec_maxdiff3:.2e}")
+            if vec_maxdiff3 > 1e-6:
+                sys.stderr.write(" FAIL\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+
+            kref_maxdiff3 = float(np.max(np.abs(fs_c_dict3['krefArea'] - fs_py3['krefArea'])))
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} fillStamp krefArea max_diff={kref_maxdiff3:.2e}")
+            if kref_maxdiff3 > 1e-6:
+                sys.stderr.write(" FAIL\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+
+            mat_maxdiff3 = float(np.max(np.abs(fs_c_dict3['mat'] - fs_py3['mat'])))
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} fillStamp mat max_diff={mat_maxdiff3:.2e}")
+            if mat_maxdiff3 > 1e-6:
+                sys.stderr.write(" FAIL\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+
+            scprod_maxdiff3 = float(np.max(np.abs(fs_c_dict3['scprod'] - fs_py3['scprod'])))
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} fillStamp scprod max_diff={scprod_maxdiff3:.2e}")
+            if scprod_maxdiff3 > 1e-6:
+                sys.stderr.write(" FAIL\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+
+            kernelSol_np3 = np.random.randn(b3solSize).astype(np.float64)
+            imNoise_np3 = (np.abs(np.random.randn(b3totalPix).astype(np.float32)) * 0.5 + 1.0).astype(np.float32)
+
+            kernelSol_c3 = numpy_to_double_ptr(kernelSol_np3)
+            imNoise_c3 = numpy_to_float_ptr(imNoise_np3)
+
+            mRData_sig_c3 = numpy_to_int_ptr(mRData_np3)
+            mRData_sig_py3 = mRData_np3.copy()
+
+            sig1_c3 = 0; sig2_c3 = 0; sig3_c3 = 0
+            temp_sig_c3 = <float*>calloc(b3fwSq, sizeof(float))
+
+            getStampSig(&fs_stamp_c3, kernelSol_c3, imNoise_c3, &sig1_c3, &sig2_c3, &sig3_c3,
+                        fwKSStamp, hwKSStamp, b3rPixX, b3rPixY, mRData_sig_c3, b"v", temp_sig_c3, b3statSig,
+                        b3nCompKer, kerOrder, bgOrder)
+
+            sig1_py3, sig2_py3, sig3_py3 = get_stamp_sig_numpy(fs_c_dict3, kernelSol_np3, imNoise_np3,
+                                                                fwKSStamp, hwKSStamp, b3rPixX, b3rPixY,
+                                                                mRData_sig_py3, "v", b3statSig,
+                                                                b3nCompKer, kerOrder, bgOrder)
+
+            sig1_diff3 = abs(sig1_c3 - sig1_py3)
+            sig1_reldiff3 = sig1_diff3 / max(abs(sig1_c3), 1.0)
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} getStampSig(v) sig1 diff={sig1_diff3:.2e} rel={sig1_reldiff3:.2e}")
+            if sig1_reldiff3 > 1e-6:
+                sys.stderr.write(f" FAIL (C={sig1_c3:.6e}, py={sig1_py3:.6e})\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+
+            free(mRData_sig_c3); free(temp_sig_c3)
+
+            mRData_sig_c3b = numpy_to_int_ptr(mRData_np3)
+            mRData_sig_py3b = mRData_np3.copy()
+            sig1_c3b = 0; sig2_c3b = 0; sig3_c3b = 0
+            temp_sig_c3b = <float*>calloc(b3fwSq, sizeof(float))
+
+            getStampSig(&fs_stamp_c3, kernelSol_c3, imNoise_c3, &sig1_c3b, &sig2_c3b, &sig3_c3b,
+                        fwKSStamp, hwKSStamp, b3rPixX, b3rPixY, mRData_sig_c3b, b"s", temp_sig_c3b, b3statSig,
+                        b3nCompKer, kerOrder, bgOrder)
+
+            sig1_py3b, sig2_py3b, sig3_py3b = get_stamp_sig_numpy(fs_c_dict3, kernelSol_np3, imNoise_np3,
+                                                                    fwKSStamp, hwKSStamp, b3rPixX, b3rPixY,
+                                                                    mRData_sig_py3b, "s", b3statSig,
+                                                                    b3nCompKer, kerOrder, bgOrder)
+
+            sig1s_diff3 = abs(sig1_c3b - sig1_py3b)
+            sig1s_reldiff3 = sig1s_diff3 / max(abs(sig1_c3b), 1.0)
+            sig2s_diff3 = abs(sig2_c3b - sig2_py3b)
+            sig3s_diff3 = abs(sig3_c3b - sig3_py3b)
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} getStampSig(s) sig1 diff={sig1s_diff3:.2e} rel={sig1s_reldiff3:.2e}")
+            if sig1s_reldiff3 > 1e-6:
+                sys.stderr.write(f" FAIL (C={sig1_c3b:.6e}, py={sig1_py3b:.6e})\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} getStampSig(s) sig2 diff={sig2s_diff3:.2e}")
+            if sig2s_diff3 > 1e-4:
+                sys.stderr.write(f" FAIL (C={sig2_c3b:.6e}, py={sig2_py3b:.6e})\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+            sys.stderr.write(f"  seed={seeds[seedIdx3]} getStampSig(s) sig3 diff={sig3s_diff3:.2e}")
+            if sig3s_diff3 > 1e-4:
+                sys.stderr.write(f" FAIL (C={sig3_c3b:.6e}, py={sig3_py3b:.6e})\n"); ok = False
+            else:
+                sys.stderr.write(" PASS\n")
+
+            free(kernelSol_c3); free(imNoise_c3)
+            free(mRData_sig_c3b); free(temp_sig_c3b)
+
+        sys.stderr.flush()
+        free(imConv_c3); free(imRef_c3); free(mRData_c3)
+        freeStampMem(&fs_stamp_c3, 1, b3nCompKer, b3nBGVectors, b3nC)
+
+    for kvi3 in range(b3nCompKer):
+        if gkv_kvec_c3[kvi3] != NULL:
+            free(gkv_kvec_c3[kvi3])
+    free(gkv_kvec_c3)
+    free(gkv_fx_c3); free(gkv_fy_c3)
+    free(deg_fixe_c3); free(sg_c3)
+    free(temp_c3)
+
+    return ok
