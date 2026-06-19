@@ -79,9 +79,9 @@ typedef struct {
 } region_state;
 
 int region_setup(hotpants_context *ctx, hotpants_params *p, int region_idx, region_state *rs);
-int region_buildstamps(hotpants_context *ctx, hotpants_params *p, region_state *rs);
+int region_buildstamps(hotpants_context *ctx, hotpants_params *p, region_state *rs, char *localForceConvolve);
 int region_fit(hotpants_context *ctx, hotpants_params *p, region_state *rs, char **localForceConvolve);
-int region_convolve_diff(hotpants_context *ctx, hotpants_params *p, region_state *rs);
+int region_convolve_diff(hotpants_context *ctx, hotpants_params *p, int region_idx, region_state *rs, char **localForceConvolve);
 void region_output(hotpants_context *ctx, hotpants_params *p, int region_idx, region_state *rs);
 void region_cleanup_local(region_state *rs, int convTmpl);
 
