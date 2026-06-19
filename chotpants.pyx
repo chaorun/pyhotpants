@@ -1,7 +1,7 @@
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free, calloc
-from libc.string cimport memset, strncmp
+from libc.string cimport memset, strncmp, memcpy
 import os, struct
 
 np.import_array()
@@ -221,6 +221,106 @@ cdef void dict_to_stamp_c(dict d, stamp_struct *s, int nCompKer, int nBGVectors,
         s.mat[j] = <double*>malloc(nC * sizeof(double))
         for k in range(nC):
             s.mat[j][k] = mat_np[j, k]
+
+cdef np.ndarray float_ptr_to_numpy(float *ptr, int n):
+    if ptr == NULL or n <= 0:
+        return np.zeros(0, dtype=np.float32)
+    return np.asarray(<float[:n]>ptr).copy()
+
+cdef np.ndarray int_ptr_to_numpy(int *ptr, int n):
+    if ptr == NULL or n <= 0:
+        return np.zeros(0, dtype=np.int32)
+    return np.asarray(<int[:n]>ptr).copy()
+
+cdef np.ndarray double_ptr_to_numpy(double *ptr, int n):
+    if ptr == NULL or n <= 0:
+        return np.zeros(0, dtype=np.float64)
+    return np.asarray(<double[:n]>ptr).copy()
+
+cdef np.ndarray double_pp_to_numpy2d(double **ptr, int rows, int cols):
+    cdef int i, j
+    if ptr == NULL or rows <= 0 or cols <= 0:
+        return np.zeros((0, 0), dtype=np.float64)
+    cdef np.ndarray[double, ndim=2] arr = np.zeros((rows, cols), dtype=np.float64)
+    for i in range(rows):
+        if ptr[i] != NULL:
+            for j in range(cols):
+                arr[i, j] = ptr[i][j]
+    return arr
+
+cdef float* numpy_to_float_ptr(np.ndarray arr):
+    cdef int n = arr.size
+    cdef float *ptr = <float*>malloc(n * sizeof(float))
+    cdef float[:] view = arr.ravel().astype(np.float32)
+    memcpy(ptr, &view[0], n * sizeof(float))
+    return ptr
+
+cdef int* numpy_to_int_ptr(np.ndarray arr):
+    cdef int n = arr.size
+    cdef int *ptr = <int*>malloc(n * sizeof(int))
+    cdef int[:] view = arr.ravel().astype(np.int32)
+    memcpy(ptr, &view[0], n * sizeof(int))
+    return ptr
+
+cdef double* numpy_to_double_ptr(np.ndarray arr):
+    cdef int n = arr.size
+    cdef double *ptr = <double*>malloc(n * sizeof(double))
+    cdef double[:] view = arr.ravel().astype(np.float64)
+    memcpy(ptr, &view[0], n * sizeof(double))
+    return ptr
+
+cdef double** numpy2d_to_double_pp(np.ndarray arr):
+    cdef int rows = arr.shape[0], cols = arr.shape[1]
+    cdef int i, j
+    cdef double **ptr = <double**>malloc(rows * sizeof(double*))
+    cdef np.ndarray[double, ndim=2] arr64 = arr.astype(np.float64)
+    for i in range(rows):
+        ptr[i] = <double*>malloc(cols * sizeof(double))
+        for j in range(cols):
+            ptr[i][j] = arr64[i, j]
+    return ptr
+
+cdef void free_double_pp(double **ptr, int rows):
+    cdef int i
+    if ptr != NULL:
+        for i in range(rows):
+            if ptr[i] != NULL:
+                free(ptr[i])
+        free(ptr)
+
+def test_convert_roundtrip():
+    import sys
+    ok = True
+
+    orig_f = np.random.randn(100).astype(np.float32)
+    cdef float *fp = numpy_to_float_ptr(orig_f)
+    rt_f = float_ptr_to_numpy(fp, 100)
+    free(fp)
+    if not np.array_equal(orig_f, rt_f):
+        sys.stderr.write("float roundtrip FAIL\n"); ok = False
+
+    orig_i = np.random.randint(-1000, 1000, 100).astype(np.int32)
+    cdef int *ip = numpy_to_int_ptr(orig_i)
+    rt_i = int_ptr_to_numpy(ip, 100)
+    free(ip)
+    if not np.array_equal(orig_i, rt_i):
+        sys.stderr.write("int roundtrip FAIL\n"); ok = False
+
+    orig_d = np.random.randn(100).astype(np.float64)
+    cdef double *dp = numpy_to_double_ptr(orig_d)
+    rt_d = double_ptr_to_numpy(dp, 100)
+    free(dp)
+    if not np.array_equal(orig_d, rt_d):
+        sys.stderr.write("double roundtrip FAIL\n"); ok = False
+
+    orig_dd = np.random.randn(5, 20).astype(np.float64)
+    cdef double **dpp = numpy2d_to_double_pp(orig_dd)
+    rt_dd = double_pp_to_numpy2d(dpp, 5, 20)
+    free_double_pp(dpp, 5)
+    if not np.array_equal(orig_dd, rt_dd):
+        sys.stderr.write("double** roundtrip FAIL\n"); ok = False
+
+    return ok
 
 def hotpants(
     inim, tmplim,
@@ -752,5 +852,422 @@ def test_stamp_roundtrip():
     free(rt.krefArea); free(rt.scprod)
     free(rt.xss); free(rt.yss)
     free(rt)
+
+    return ok
+
+def test_functions_batch1():
+    import sys
+    ok = True
+
+    # --- sigma_clip ---
+    np.random.seed(42)
+    data_sc = np.random.randn(200).astype(np.float32) * 10 + 50
+    cdef float *data_sc_c = numpy_to_float_ptr(data_sc)
+    cdef double sc_mean = 0, sc_stdev = 0
+    cdef int sc_rc = sigma_clip(data_sc_c, 200, &sc_mean, &sc_stdev, 10, 3.0)
+    free(data_sc_c)
+
+    from pyhotpants.numutils import sigma_clip_numpy
+    py_mean, py_stdev, py_rc = sigma_clip_numpy(data_sc.copy(), maxiter=10, stat_sig=3.0)
+
+    if abs(sc_mean - py_mean) > 0 or abs(sc_stdev - py_stdev) > 0:
+        sys.stderr.write(f"sigma_clip FAIL: c=({sc_mean},{sc_stdev},{sc_rc}), py=({py_mean},{py_stdev},{py_rc})\n")
+        ok = False
+    else:
+        sys.stderr.write("sigma_clip PASS\n")
+    sys.stderr.flush()
+
+    # --- getNoiseStats3 ---
+    np.random.seed(43)
+    cdef int gnPixX = 20, gnPixY = 15
+    data_gn = np.random.randn(gnPixX * gnPixY).astype(np.float32) * 5 + 100
+    noise_gn = (np.abs(np.random.randn(gnPixX * gnPixY).astype(np.float32)) + 1.0).astype(np.float32)
+    mRData_gn = np.zeros(gnPixX * gnPixY, dtype=np.int32)
+    mRData_gn[0] = 0x80
+    mRData_gn[5] = 0x100
+
+    cdef float *data_gn_c = numpy_to_float_ptr(data_gn)
+    cdef float *noise_gn_c = numpy_to_float_ptr(noise_gn)
+    cdef int *mRData_gn_c = numpy_to_int_ptr(mRData_gn)
+    cdef double gn_nnorm = 0
+    cdef int gn_nncount = 0
+    getNoiseStats3(data_gn_c, noise_gn_c, &gn_nnorm, &gn_nncount, 0, 0x8000, gnPixX, gnPixY, mRData_gn_c)
+    free(data_gn_c)
+    free(noise_gn_c)
+    free(mRData_gn_c)
+
+    from pyhotpants.numutils import get_noise_stats3_numpy
+    py_nnorm, py_nncount = get_noise_stats3_numpy(data_gn, noise_gn, 0, 0x8000, gnPixX, gnPixY, mRData_gn)
+
+    if abs(gn_nnorm - py_nnorm) > 0 or gn_nncount != py_nncount:
+        sys.stderr.write(f"getNoiseStats3 FAIL: c=({gn_nnorm},{gn_nncount}), py=({py_nnorm},{py_nncount})\n")
+        ok = False
+    else:
+        sys.stderr.write("getNoiseStats3 PASS\n")
+    sys.stderr.flush()
+
+    # --- insert_subregion_flt ---
+    np.random.seed(44)
+    cdef int isf_subNx = 30, isf_subNy = 25
+    cdef long isf_fullNx = 100
+    cdef int isf_fullNy = 80
+    sub_flt = np.random.randn(isf_subNy * isf_subNx).astype(np.float32)
+    full_flt_c = np.zeros(isf_fullNy * isf_fullNx, dtype=np.float32)
+    full_flt_py = np.zeros((isf_fullNy, isf_fullNx), dtype=np.float32)
+    cdef int isf_fpX = 11, isf_fpY = 6, isf_lpX = 20, isf_lpY = 15
+    cdef int isf_xBufLo = 2, isf_yBufLo = 3
+
+    cdef float *sub_flt_c = numpy_to_float_ptr(sub_flt)
+    cdef float *full_flt_c_ptr = numpy_to_float_ptr(full_flt_c)
+    insert_subregion_flt(sub_flt_c, isf_subNx, full_flt_c_ptr, isf_fullNx, isf_fpX, isf_fpY, isf_lpX, isf_lpY, isf_xBufLo, isf_yBufLo)
+    full_flt_c_result = float_ptr_to_numpy(full_flt_c_ptr, isf_fullNy * isf_fullNx)
+    free(sub_flt_c)
+    free(full_flt_c_ptr)
+
+    from pyhotpants.numutils import insert_subregion_flt_numpy
+    sub_flt_2d = sub_flt.reshape(isf_subNy, isf_subNx)
+    insert_subregion_flt_numpy(sub_flt_2d, full_flt_py, isf_fpX, isf_fpY, isf_lpX, isf_lpY, isf_xBufLo, isf_yBufLo)
+    full_flt_py_result = full_flt_py.ravel()
+
+    if not np.array_equal(full_flt_c_result, full_flt_py_result):
+        ndiff = np.sum(full_flt_c_result != full_flt_py_result)
+        sys.stderr.write(f"insert_subregion_flt FAIL: {ndiff} diffs\n")
+        ok = False
+    else:
+        sys.stderr.write("insert_subregion_flt PASS\n")
+    sys.stderr.flush()
+
+    # --- insert_subregion_int ---
+    np.random.seed(45)
+    cdef int isi_subNx = 30, isi_subNy = 25
+    cdef long isi_fullNx = 100
+    cdef int isi_fullNy = 80
+    sub_int = np.random.randint(-1000, 1000, isi_subNy * isi_subNx).astype(np.int32)
+    full_int_c = np.zeros(isi_fullNy * isi_fullNx, dtype=np.int32)
+    full_int_py = np.zeros((isi_fullNy, isi_fullNx), dtype=np.int32)
+    cdef int isi_fpX = 11, isi_fpY = 6, isi_lpX = 20, isi_lpY = 15
+    cdef int isi_xBufLo = 2, isi_yBufLo = 3
+
+    cdef int *sub_int_c = numpy_to_int_ptr(sub_int)
+    cdef int *full_int_c_ptr = numpy_to_int_ptr(full_int_c)
+    insert_subregion_int(sub_int_c, isi_subNx, full_int_c_ptr, isi_fullNx, isi_fpX, isi_fpY, isi_lpX, isi_lpY, isi_xBufLo, isi_yBufLo)
+    full_int_c_result = int_ptr_to_numpy(full_int_c_ptr, isi_fullNy * isi_fullNx)
+    free(sub_int_c)
+    free(full_int_c_ptr)
+
+    from pyhotpants.numutils import insert_subregion_int_numpy
+    sub_int_2d = sub_int.reshape(isi_subNy, isi_subNx)
+    insert_subregion_int_numpy(sub_int_2d, full_int_py, isi_fpX, isi_fpY, isi_lpX, isi_lpY, isi_xBufLo, isi_yBufLo)
+    full_int_py_result = full_int_py.ravel()
+
+    if not np.array_equal(full_int_c_result, full_int_py_result):
+        ndiff_i = np.sum(full_int_c_result != full_int_py_result)
+        sys.stderr.write(f"insert_subregion_int FAIL: {ndiff_i} diffs\n")
+        ok = False
+    else:
+        sys.stderr.write("insert_subregion_int PASS\n")
+    sys.stderr.flush()
+
+    # --- cutStamp ---
+    np.random.seed(46)
+    cdef int cs_dxLen = 50, cs_dyLen = 40
+    data_cs = np.random.randn(cs_dxLen * cs_dyLen).astype(np.float32) * 10 + 50
+    cdef int cs_xMin = 5, cs_yMin = 8, cs_xMax = 20, cs_yMax = 25
+    cdef int cs_sxLen = cs_xMax - cs_xMin + 1
+    cdef int cs_syLen = cs_yMax - cs_yMin + 1
+
+    cdef float *data_cs_c = numpy_to_float_ptr(data_cs)
+    cdef float *refArea_c = <float*>calloc(cs_sxLen * cs_syLen, sizeof(float))
+    cdef stamp_struct cs_stamp
+    memset(&cs_stamp, 0, sizeof(stamp_struct))
+    cutStamp(data_cs_c, refArea_c, cs_dxLen, cs_xMin, cs_yMin, cs_xMax, cs_yMax, &cs_stamp)
+    refArea_result = float_ptr_to_numpy(refArea_c, cs_sxLen * cs_syLen)
+    cdef int cs_x0 = cs_stamp.x0, cs_y0 = cs_stamp.y0
+    cdef int cs_cx = cs_stamp.x, cs_cy = cs_stamp.y
+    free(data_cs_c)
+    free(refArea_c)
+
+    from pyhotpants.numutils import cut_stamp_numpy
+    py_refArea, py_x0, py_y0, py_cx, py_cy = cut_stamp_numpy(data_cs, cs_dxLen, cs_xMin, cs_yMin, cs_xMax, cs_yMax)
+
+    cs_ok = np.array_equal(refArea_result, py_refArea) and cs_x0 == py_x0 and cs_y0 == py_y0 and cs_cx == py_cx and cs_cy == py_cy
+    if not cs_ok:
+        sys.stderr.write(f"cutStamp FAIL: ref_eq={np.array_equal(refArea_result, py_refArea)} x0=({cs_x0},{py_x0}) y0=({cs_y0},{py_y0}) cx=({cs_cx},{py_cx}) cy=({cs_cy},{py_cy})\n")
+        ok = False
+    else:
+        sys.stderr.write("cutStamp PASS\n")
+    sys.stderr.flush()
+
+    return ok
+
+def test_functions_batch2():
+    import sys
+    ok = True
+
+    np.random.seed(47)
+    cdef int nPixX = 100, nPixY = 100
+    cdef int x0Reg = 10, y0Reg = 10
+    cdef int gs3rPixX = 120, gs3rPixY = 120
+    cdef int gs3umask = 0, gs3smask = 0xffff
+    cdef int gs3maxiter = 10
+    cdef float gs3statSig = 3.0
+
+    data_gs3 = (np.random.randn(nPixY, nPixX).astype(np.float32) * 10 + 100).astype(np.float32)
+    data_gs3[5, 5] = np.float32('nan')
+    data_gs3[50, 50] = np.float32('nan')
+
+    mRData_gs3 = np.zeros((gs3rPixY, gs3rPixX), dtype=np.int32)
+    mRData_gs3[y0Reg + 3, x0Reg + 3] = 0x80
+    mRData_gs3[y0Reg + 7, x0Reg + 7] = 0x100
+
+    data_flat_gs3 = np.ascontiguousarray(data_gs3.ravel(), dtype=np.float32)
+    mRData_c_gs3 = np.ascontiguousarray(mRData_gs3.ravel(), dtype=np.int32)
+    mRData_py_gs3 = mRData_gs3.copy()
+
+    cdef float *data_c_ptr = numpy_to_float_ptr(data_flat_gs3)
+    cdef int *mRData_c_ptr = numpy_to_int_ptr(mRData_c_gs3)
+
+    cdef double c_sum = 0, c_mean = 0, c_median = 0
+    cdef double c_mode = 0, c_sd = 0, c_fwhm = 0, c_lfwhm = 0
+    cdef int c_rc = getStampStats3(data_c_ptr, x0Reg, y0Reg, nPixX, nPixY,
+                                    &c_sum, &c_mean, &c_median,
+                                    &c_mode, &c_sd, &c_fwhm, &c_lfwhm,
+                                    gs3umask, gs3smask, gs3maxiter,
+                                    gs3rPixX, mRData_c_ptr, gs3statSig)
+
+    from pyhotpants.numutils import get_stamp_stats3_numpy
+    py_result = get_stamp_stats3_numpy(data_gs3, x0Reg, y0Reg, nPixX, nPixY,
+                                        gs3umask, gs3smask, gs3maxiter,
+                                        gs3rPixX, mRData_py_gs3, gs3statSig)
+
+    py_rc = py_result['return_code']
+
+    if c_rc != py_rc:
+        sys.stderr.write(f"getStampStats3 return_code FAIL: C={c_rc}, py={py_rc}\n")
+        ok = False
+    else:
+        sys.stderr.write(f"getStampStats3 return_code MATCH: {c_rc}\n")
+
+    if c_rc == 0 and py_rc == 0:
+        pairs = [
+            ('sum', c_sum, py_result['sum']),
+            ('mean', c_mean, py_result['mean']),
+            ('median', c_median, py_result['median']),
+            ('mode', c_mode, py_result['mode']),
+            ('sd', c_sd, py_result['sd']),
+            ('fwhm', c_fwhm, py_result['fwhm']),
+            ('lfwhm', c_lfwhm, py_result['lfwhm']),
+        ]
+        for name, cval, pyval in pairs:
+            if abs(cval - pyval) > 1e-12:
+                sys.stderr.write(f"  {name} FAIL: C={cval}, py={pyval}, diff={abs(cval-pyval)}\n")
+                ok = False
+            else:
+                sys.stderr.write(f"  {name} PASS: {cval} (diff={abs(cval-pyval):.2e})\n")
+
+    mRData_c_result = int_ptr_to_numpy(mRData_c_ptr, gs3rPixX * gs3rPixY)
+    mRData_py_result = mRData_py_gs3.ravel()
+    if not np.array_equal(mRData_c_result, mRData_py_result):
+        ndiff_m = np.sum(mRData_c_result != mRData_py_result)
+        diff_idx_m = np.where(mRData_c_result != mRData_py_result)[0]
+        sys.stderr.write(f"getStampStats3 mRData FAIL: {ndiff_m} diffs, first at flat idx {diff_idx_m[0]}: C={mRData_c_result[diff_idx_m[0]]}, py={mRData_py_result[diff_idx_m[0]]}\n")
+        ok = False
+    else:
+        sys.stderr.write("getStampStats3 mRData PASS\n")
+
+    free(data_c_ptr)
+    free(mRData_c_ptr)
+    sys.stderr.flush()
+
+    return ok
+
+def test_functions_batch3():
+    import sys
+    ok = True
+
+    # ===== cutSStamp =====
+    np.random.seed(50)
+    cdef int css_rPixX = 60
+    cdef int css_rPixY = 60
+    cdef int css_fwKSStamp = 7, css_hwKSStamp = 3
+    cdef float css_fillVal = -999.0
+    cdef int css_nKSStamps = 5
+
+    iData_css = np.random.randn(css_rPixX * css_rPixY).astype(np.float32) * 10 + 100
+    mRData_css_orig = np.zeros(css_rPixX * css_rPixY, dtype=np.int32)
+    mRData_css_orig[23 + 60 * 22] = 0x80
+
+    cdef stamp_struct css_sc
+    memset(&css_sc, 0, sizeof(stamp_struct))
+    css_sc.x0 = 10; css_sc.y0 = 10
+    css_sc.x = 15; css_sc.y = 15
+    css_sc.nss = 3; css_sc.sscnt = 0
+    css_sc.krefArea = <double*>calloc(css_fwKSStamp * css_fwKSStamp, sizeof(double))
+    css_sc.xss = <int*>calloc(css_nKSStamps, sizeof(int))
+    css_sc.yss = <int*>calloc(css_nKSStamps, sizeof(int))
+    css_sc.xss[0] = 20; css_sc.yss[0] = 20
+    css_sc.xss[1] = 22; css_sc.yss[1] = 22
+    css_sc.xss[2] = 25; css_sc.yss[2] = 25
+
+    cdef float *iData_css_c = numpy_to_float_ptr(iData_css)
+    cdef int *mRData_css_c = numpy_to_int_ptr(mRData_css_orig)
+
+    cdef int css_rc_c = cutSStamp(&css_sc, iData_css_c, css_fwKSStamp, css_hwKSStamp, css_fillVal, css_rPixX, mRData_css_c, 0)
+
+    c_krefArea_css = double_ptr_to_numpy(css_sc.krefArea, css_fwKSStamp * css_fwKSStamp)
+    cdef double c_sum_css = css_sc.sum
+
+    free(iData_css_c); free(mRData_css_c)
+    free(css_sc.krefArea); free(css_sc.xss); free(css_sc.yss)
+
+    py_stamp_css = {
+        'x0': 10, 'y0': 10, 'x': 15, 'y': 15,
+        'nss': 3, 'sscnt': 0,
+        'xss': np.array([20, 22, 25, 0, 0], dtype=np.int32),
+        'yss': np.array([20, 22, 25, 0, 0], dtype=np.int32),
+        'krefArea': np.zeros(css_fwKSStamp * css_fwKSStamp, dtype=np.float64),
+        'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
+        'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0,
+        'chi2': 0.0, 'norm': 0.0, 'diff': 0.0,
+    }
+
+    from pyhotpants.numutils import cut_sstamp_numpy
+    py_rc_css = cut_sstamp_numpy(py_stamp_css, iData_css, css_fwKSStamp, css_hwKSStamp, float(css_fillVal), css_rPixX, mRData_css_orig, 0)
+
+    if css_rc_c != py_rc_css:
+        sys.stderr.write(f"cutSStamp rc FAIL: C={css_rc_c}, py={py_rc_css}\n"); ok = False
+    elif not np.array_equal(c_krefArea_css, py_stamp_css['krefArea']):
+        ndiff = int(np.sum(c_krefArea_css != py_stamp_css['krefArea']))
+        sys.stderr.write(f"cutSStamp krefArea FAIL: {ndiff} diffs\n"); ok = False
+    elif abs(c_sum_css - py_stamp_css['sum']) > 0:
+        sys.stderr.write(f"cutSStamp sum FAIL: C={c_sum_css}, py={py_stamp_css['sum']}\n"); ok = False
+    else:
+        sys.stderr.write("cutSStamp PASS\n")
+    sys.stderr.flush()
+
+    # ===== checkPsfCenter =====
+    np.random.seed(51)
+    cdef int cpc_rPixX = 50, cpc_rPixY = 50
+    cdef int cpc_xLen = 40, cpc_yLen = 40
+    cdef int cpc_sx0 = 5, cpc_sy0 = 5
+    cdef int cpc_imax = 20, cpc_jmax = 20
+    cdef int cpc_hwKS = 3
+    cdef double cpc_hiThresh = 50000.0
+    cdef float cpc_sky = 100.0
+    cdef float cpc_invdsky = 0.1
+    cdef int cpc_bbit = 0x3bf, cpc_bbit1 = 0x100
+    cdef float cpc_kft = 3.0
+
+    iData_cpc = np.random.randn(cpc_rPixX * cpc_rPixY).astype(np.float32) * 10 + 150
+    mRData_cpc_c_arr = np.zeros(cpc_rPixX * cpc_rPixY, dtype=np.int32)
+    mRData_cpc_py_arr = mRData_cpc_c_arr.copy()
+
+    cdef float *iData_cpc_c = numpy_to_float_ptr(iData_cpc)
+    cdef int *mRData_cpc_c = numpy_to_int_ptr(mRData_cpc_c_arr)
+
+    cdef double cpc_rc = checkPsfCenter(iData_cpc_c, cpc_imax, cpc_jmax, cpc_xLen, cpc_yLen,
+                                         cpc_sx0, cpc_sy0, cpc_hiThresh, cpc_sky, cpc_invdsky,
+                                         0, 0, cpc_bbit, cpc_bbit1,
+                                         cpc_rPixX, cpc_hwKS, mRData_cpc_c, cpc_kft)
+
+    mRData_cpc_c_result = int_ptr_to_numpy(mRData_cpc_c, cpc_rPixX * cpc_rPixY)
+    free(iData_cpc_c); free(mRData_cpc_c)
+
+    from pyhotpants.numutils import check_psf_center_numpy
+    cpc_rc_py = check_psf_center_numpy(iData_cpc, cpc_imax, cpc_jmax, cpc_xLen, cpc_yLen,
+                                        cpc_sx0, cpc_sy0, cpc_hiThresh,
+                                        float(cpc_sky), float(cpc_invdsky),
+                                        0, 0, cpc_bbit, cpc_bbit1,
+                                        cpc_rPixX, cpc_hwKS, mRData_cpc_py_arr, float(cpc_kft))
+
+    if abs(cpc_rc - cpc_rc_py) > 0:
+        sys.stderr.write(f"checkPsfCenter retval FAIL: C={cpc_rc}, py={cpc_rc_py}\n"); ok = False
+    elif not np.array_equal(mRData_cpc_c_result, mRData_cpc_py_arr):
+        ndiff = int(np.sum(mRData_cpc_c_result != mRData_cpc_py_arr))
+        sys.stderr.write(f"checkPsfCenter mRData FAIL: {ndiff} diffs\n"); ok = False
+    else:
+        sys.stderr.write("checkPsfCenter PASS\n")
+    sys.stderr.flush()
+
+    # ===== getPsfCenters =====
+    cdef int gpc_rPixX = 60, gpc_rPixY = 60
+    cdef int gpc_xLen = 40, gpc_yLen = 40
+    cdef int gpc_nKSStamps = 3, gpc_hwKS = 3
+    cdef double gpc_hiThresh = 500.0
+    cdef float gpc_kft = 3.0
+    cdef int gpc_bbit1 = 0x100, gpc_bbit2 = 0x200
+
+    iData_gpc = np.full(gpc_rPixX * gpc_rPixY, np.float32(100.0), dtype=np.float32)
+    iData_gpc[20 + gpc_rPixX * 20] = np.float32(350.0)
+    iData_gpc[30 + gpc_rPixX * 15] = np.float32(350.0)
+
+    mRData_gpc_c_arr = np.zeros(gpc_rPixX * gpc_rPixY, dtype=np.int32)
+    mRData_gpc_py_arr = mRData_gpc_c_arr.copy()
+
+    cdef stamp_struct gpc_sc
+    memset(&gpc_sc, 0, sizeof(stamp_struct))
+    gpc_sc.x0 = 5; gpc_sc.y0 = 5
+    gpc_sc.x = 25; gpc_sc.y = 25
+    gpc_sc.mode = 100.0; gpc_sc.fwhm = 10.0
+    gpc_sc.nss = 0; gpc_sc.sscnt = 0
+    gpc_sc.xss = <int*>calloc(gpc_nKSStamps, sizeof(int))
+    gpc_sc.yss = <int*>calloc(gpc_nKSStamps, sizeof(int))
+
+    cdef float *iData_gpc_c = numpy_to_float_ptr(iData_gpc)
+    cdef int *mRData_gpc_c = numpy_to_int_ptr(mRData_gpc_c_arr)
+
+    cdef int gpc_rc_c = getPsfCenters(&gpc_sc, iData_gpc_c, gpc_xLen, gpc_yLen,
+                                       gpc_hiThresh, gpc_bbit1, gpc_bbit2,
+                                       gpc_nKSStamps, gpc_hwKS,
+                                       gpc_rPixX, mRData_gpc_c, gpc_kft, 0)
+
+    cdef int c_nss_gpc = gpc_sc.nss
+    cdef int j_gpc
+    c_xss_gpc = np.array([gpc_sc.xss[j_gpc] for j_gpc in range(gpc_nKSStamps)], dtype=np.int32)
+    c_yss_gpc = np.array([gpc_sc.yss[j_gpc] for j_gpc in range(gpc_nKSStamps)], dtype=np.int32)
+    mRData_gpc_c_result = int_ptr_to_numpy(mRData_gpc_c, gpc_rPixX * gpc_rPixY)
+    free(iData_gpc_c); free(mRData_gpc_c)
+    free(gpc_sc.xss); free(gpc_sc.yss)
+
+    py_stamp_gpc = {
+        'x0': 5, 'y0': 5, 'x': 25, 'y': 25,
+        'nss': 0, 'sscnt': 0,
+        'mode': 100.0, 'fwhm': 10.0,
+        'xss': np.zeros(gpc_nKSStamps, dtype=np.int32),
+        'yss': np.zeros(gpc_nKSStamps, dtype=np.int32),
+        'krefArea': np.zeros(1, dtype=np.float64),
+        'sum': 0.0, 'mean': 0.0, 'median': 0.0,
+        'sd': 0.0, 'lfwhm': 0.0,
+        'chi2': 0.0, 'norm': 0.0, 'diff': 0.0,
+    }
+
+    from pyhotpants.numutils import get_psf_centers_numpy
+    gpc_rc_py = get_psf_centers_numpy(py_stamp_gpc, iData_gpc, gpc_xLen, gpc_yLen,
+                                       gpc_hiThresh, gpc_bbit1, gpc_bbit2,
+                                       gpc_nKSStamps, gpc_hwKS,
+                                       gpc_rPixX, mRData_gpc_py_arr, float(gpc_kft), 0)
+
+    gpc_ok = True
+    if gpc_rc_c != gpc_rc_py:
+        sys.stderr.write(f"getPsfCenters rc FAIL: C={gpc_rc_c}, py={gpc_rc_py}\n"); gpc_ok = False
+    if c_nss_gpc != py_stamp_gpc['nss']:
+        sys.stderr.write(f"getPsfCenters nss FAIL: C={c_nss_gpc}, py={py_stamp_gpc['nss']}\n"); gpc_ok = False
+    if not np.array_equal(c_xss_gpc, py_stamp_gpc['xss']):
+        sys.stderr.write(f"getPsfCenters xss FAIL: C={c_xss_gpc}, py={py_stamp_gpc['xss']}\n"); gpc_ok = False
+    if not np.array_equal(c_yss_gpc, py_stamp_gpc['yss']):
+        sys.stderr.write(f"getPsfCenters yss FAIL: C={c_yss_gpc}, py={py_stamp_gpc['yss']}\n"); gpc_ok = False
+    if not np.array_equal(mRData_gpc_c_result, mRData_gpc_py_arr):
+        ndiff = int(np.sum(mRData_gpc_c_result != mRData_gpc_py_arr))
+        sys.stderr.write(f"getPsfCenters mRData FAIL: {ndiff} diffs\n"); gpc_ok = False
+    if gpc_ok:
+        sys.stderr.write("getPsfCenters PASS\n")
+    else:
+        ok = False
+    sys.stderr.flush()
+
+    sys.stderr.write("buildStamps SKIP (complex multi-function dependency)\n")
+    sys.stderr.write("buildSigMask SKIP (not found in functions.c)\n")
+    sys.stderr.write("stampStats SKIP (not found in functions.c)\n")
+    sys.stderr.flush()
 
     return ok

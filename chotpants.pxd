@@ -134,6 +134,18 @@ cdef extern from "hotpants_compute.h":
 cdef extern from "functions.h":
     int allocateStamps(stamp_struct *, int, int, int, int, int, int)
     double ran1(int *idum)
+    int sigma_clip(float *, int, double *, double *, int, float)
+    void getNoiseStats3(float *, float *, double *, int *, int, int, int, int, int *)
+    void insert_subregion_flt(float *, int, float *, long, int, int, int, int, int, int)
+    void insert_subregion_int(int *, int, int *, long, int, int, int, int, int, int)
+    void cutStamp(float *, float *, int, int, int, int, int, stamp_struct *)
+    int getStampStats3(float *, int, int, int, int, double *, double *, double *, double *, double *, double *, double *, int, int, int, int, int *, float)
+    int cutSStamp(stamp_struct *, float *, int, int, float, int, int *, int)
+    double checkPsfCenter(float *, int, int, int, int, int, int, double, float, float, int, int, int, int, int, int, int *, float)
+    int getPsfCenters(stamp_struct *, float *, int, int, double, int, int, int, int, int, int *, float, int)
+    void dfset(double *, double, int, int)
+    void quick_sort(double *, int *, int)
+    void buildStamps(int, int, int, int, int *, int *, int, int, int, stamp_struct *, stamp_struct *, float *, float *, float, float, int, char *, int, int, float, float, int, int, int, float, int *, float)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(

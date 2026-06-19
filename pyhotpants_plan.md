@@ -225,3 +225,140 @@ numpy 为主路径，C 为影子，逐字节对比所有输出（diffOut, noiseO
 1. getStampStats3 (275行)：直方图+随机采样+迭代，需要 ran1 一致性
 2. 数值精度：C float/double 隐式转换 vs numpy float32/float64
 3. 后续 buildstamps/fit/convolve_diff 的 stamp 双向转换更复杂（远期）
+
+## 完整路线图
+
+### Phase 1 — C 层重构 + Python 主循环 ✅
+
+| 子阶段 | 内容 | 状态 |
+|--------|------|------|
+| 1a | 从 hotpants_compute 提取 init/cleanup，暴露 context/params 到头文件 | ✅ |
+| 1b | 提取 process_region (~900行)，.pyx 中 Python 掌控主循环 | ✅ |
+
+### Phase 2 — process_region 拆分 ✅
+
+| 子阶段 | 内容 | 状态 |
+|--------|------|------|
+| 2a | 拆成 6 个子步骤函数 (setup/buildstamps/fit/convolve_diff/output/cleanup) | ✅ |
+
+### Phase 3 — 逐步 numpy 化（当前阶段）
+
+架构原则：纯 Python 函数 + Cython 胶水层（C↔Python 转换在函数外，函数内零 C 调用）
+
+| 子阶段 | 内容 | 核心替换 | 状态 |
+|--------|------|----------|------|
+| 3a | region_setup → numpy | extract_subregion→切片, makeNoiseImage4→numpy, makeInputMask→numpy | ✅ |
+| 3b | region_output → numpy | insert_subregion→切片, getStampStats3→numpy, sigma_clip→numpy | 进行中 |
+| 3c | region_cleanup_local | numpy 数组由 GC 管理，C free 逐步消失 | 待做 |
+| 3d | region_buildstamps → numpy | buildStamps 逻辑（stamp 中心检测、substamp 构建） | 待做 |
+| 3e | region_fit → numpy | fillStamp→numpy 卷积, check_stamps→numpy 矩阵运算 | 待做 |
+| 3f | region_convolve_diff → numpy | fitKernel→numpy 线性代数, spatial_convolve→numpy 卷积 | 待做 |
+
+### Phase 4 — init/cleanup numpy 化
+
+| 内容 | 说明 |
+|------|------|
+| hotpants_init | 整数计算→Python，calloc→numpy，kernel_vec/check_mat 指针数组→numpy+指针 |
+| hotpants_cleanup | numpy 数组自动 GC，手动 free 消失 |
+
+### Phase 5 — 完全脱离 C
+
+| 内容 | 说明 |
+|------|------|
+| 移除 csrc/ 目录 | 所有 C 代码不再需要 |
+| 移除 .pxd 中的 C 声明 | 所有接口纯 Python |
+| setup.py 简化 | 不再编译 C 扩展（或保留可选的 Cython 加速层） |
+| 纯 pip install | 无需 C 编译器 |
+
+### 各 Phase 难度评估
+
+| Phase | 难度 | 关键挑战 |
+|-------|------|----------|
+| 3a | 低 | ✅ 已完成 |
+| 3b | 中 | getStampStats3 (275行, ran1+直方图+迭代), 数值精度 |
+| 3c | 无 | numpy GC 自动处理 |
+| 3d | 中高 | buildStamps 的 PSF 中心检测, stamp 双向转换已就绪 |
+| 3e | 高 | fillStamp 的基函数卷积, check_stamps 的矩阵求解 (ludcmp/lubksb) |
+| 3f | 最高 | fitKernel 的迭代最小二乘, spatial_convolve 的空间变化卷积 |
+| 4 | 低 | init 只是整数计算+数组分配 |
+| 5 | 低 | 删除 C 代码，清理构建系统 |
+
+### 已完成的基础设施
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| Ran1 类 | numutils.py | 与 C ran1 完全一致的 Python 随机数生成器 |
+| stamp_c_to_dict | chotpants.pyx | C stamp_struct → Python dict（完整 22 字段） |
+| dict_to_stamp_c | chotpants.pyx | Python dict → C stamp_struct（完整双向，roundtrip 测试通过） |
+| region_setup_numpy | chotpants.pyx | 纯 numpy 的 region_setup 实现 |
+| 影子执行框架 | chotpants.pyx | numpy 主路径 + C 影子验证模式 |
+
+### Convert 函数计划（C↔Python 转换工具箱）
+
+在做底层函数 numpy 化之前，先准备完整的 C↔Python 转换函数。所有 convert 函数为 cdef（Cython 胶水层），放在 chotpants.pyx 中。
+
+#### 已完成
+
+| 函数 | 方向 | 说明 |
+|------|------|------|
+| stamp_c_to_dict | C→Py | stamp_struct → dict，完整 22 字段 + vectors/mat/krefArea/scprod |
+| dict_to_stamp_c | Py→C | dict → stamp_struct，malloc + 完整数据复制 |
+| test_stamp_roundtrip | 测试 | 随机数据往返 C→Py→C 逐字节一致 |
+
+#### 待实现：基本指针转换
+
+| 函数 | 方向 | 签名 | 说明 |
+|------|------|------|------|
+| float_ptr_to_numpy | C→Py | (float *ptr, int n) → np.ndarray | 复制 float* 为 float32 数组 |
+| int_ptr_to_numpy | C→Py | (int *ptr, int n) → np.ndarray | 复制 int* 为 int32 数组 |
+| double_ptr_to_numpy | C→Py | (double *ptr, int n) → np.ndarray | 复制 double* 为 float64 数组 |
+| double_pp_to_numpy2d | C→Py | (double **ptr, int rows, int cols) → np.ndarray | 复制 double** 为 2D float64 数组 |
+| numpy_to_float_ptr | Py→C | (np.ndarray) → float* | malloc + memcpy，调用者负责 free |
+| numpy_to_int_ptr | Py→C | (np.ndarray) → int* | 同上 |
+| numpy_to_double_ptr | Py→C | (np.ndarray) → double* | 同上 |
+| numpy2d_to_double_pp | Py→C | (np.ndarray) → double** | malloc 行指针 + 每行 malloc + 复制 |
+| free_double_pp | 清理 | (double **ptr, int rows) | 释放 double** 的每行和行指针 |
+
+#### 验证方式
+
+每个 convert 函数都做 roundtrip 测试：
+1. 用 numpy 随机数创建测试数据
+2. numpy_to_xxx_ptr → C 指针
+3. xxx_ptr_to_numpy → 新 numpy 数组
+4. 对比原始数据与往返数据，逐字节一致
+5. free C 指针
+
+#### 使用场景
+
+这些 convert 函数在两个地方使用：
+1. **底层函数单元测试**：随机输入 → convert 为 C 类型 → 调用 C 函数 → convert 输出为 Python → 对比 numpy 版本
+2. **region 子步骤替换**：主循环胶水层中，把 C 数据转为 Python 传给纯 numpy 函数，结果转回 C
+
+### 底层函数 numpy 化计划
+
+在 convert 函数就绪后，按先易后难的顺序 numpy 化所有底层 C 函数。
+
+#### 函数所在文件
+
+| 文件 | 函数 |
+|------|------|
+| functions.c | sigma_clip, getStampStats3, getNoiseStats3, insert_subregion_flt/int, buildStamps, getPsfCenters, cutSStamp, makeNoiseImage4, makeInputMask, spreadMask, fset, ran1, allocateStamps, freeStampMem |
+| alard.c | getKernelVec, fillStamp, check_stamps, fitKernel, spatial_convolve, make_kernel, get_background, getFinalStampSig, getStampSig, check_again, build_matrix/scprod, build_matrix0/scprod0, ludcmp, lubksb, xy_conv_stamp, make_model |
+
+#### 执行批次
+
+| 批次 | 函数 | 难度 | 说明 |
+|------|------|------|------|
+| 第一批 | sigma_clip, getNoiseStats3, insert_subregion, getFinalStampSig, get_background, make_kernel | 低 | 短小直接，纯数组运算 |
+| 第二批 | getStampStats3, getKernelVec, ludcmp/lubksb | 中 | getStampStats3 需要 ran1；ludcmp/lubksb 可用 np.linalg.solve |
+| 第三批 | fillStamp, build_matrix/scprod, check_stamps, buildStamps, getPsfCenters | 中高 | 基函数卷积 + 矩阵组装 |
+| 第四批 | fitKernel, spatial_convolve | 最高 | 迭代最小二乘 + 空间变化卷积 |
+
+#### 每个函数的测试方式
+
+1. 用随机数据生成输入（numpy 随机数）
+2. 通过 convert 函数转为 C 类型
+3. 调用 C 函数获取参考输出
+4. 调用 numpy 版本获取输出
+5. 逐值对比（float 允许 eps 误差或要求逐字节一致）
+6. 释放 C 内存
