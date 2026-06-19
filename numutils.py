@@ -1654,3 +1654,60 @@ def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
                 scnt += 1
 
     return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps)
+
+
+def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
+                     verbose, nS, fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
+                     kerSigReject, statSig, mRData, ngauss, deg_fixe,
+                     hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal):
+    ncomp1 = nCompKer - 1
+    ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    mat_size = ncomp1 * ncomp2 + nbg_vec + 1
+
+    wxy = np.zeros((nS, ncomp2), dtype=np.float64)
+
+    matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
+                                fwKSStamp, rPixX, rPixY, verbose, wxy)
+    kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
+                                   fwKSStamp, hwKSStamp, rPixX, wxy)
+
+    indx = np.zeros(mat_size + 1, dtype=np.int32)
+    ludcmp_numpy(matrix, mat_size, indx)
+    lubksb_numpy(matrix, mat_size, indx, kernelSol)
+
+    check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
+        stamps_dicts, kernelSol, imConv, imRef, imNoise,
+        nS, verbose, figMerit, kerSigReject, statSig,
+        fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+        nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
+        hwKernel, fwKernel, usePCA, filter_x, filter_y,
+        PCA, fillVal)
+
+    while check:
+        wxy = np.zeros((nS, ncomp2), dtype=np.float64)
+
+        matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
+                                    fwKSStamp, rPixX, rPixY, verbose, wxy)
+        kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
+                                       fwKSStamp, hwKSStamp, rPixX, wxy)
+
+        indx = np.zeros(mat_size + 1, dtype=np.int32)
+        ludcmp_numpy(matrix, mat_size, indx)
+        lubksb_numpy(matrix, mat_size, indx, kernelSol)
+
+        check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
+            stamps_dicts, kernelSol, imConv, imRef, imNoise,
+            nS, verbose, figMerit, kerSigReject, statSig,
+            fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+            nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
+            hwKernel, fwKernel, usePCA, filter_x, filter_y,
+            PCA, fillVal)
+
+    return {
+        'kernelSol': kernelSol,
+        'meansigSubstamps': meansigSubstamps,
+        'scatterSubstamps': scatterSubstamps,
+        'NskippedSubstamps': nskippedSubstamps,
+        'stamps': stamps_dicts,
+    }

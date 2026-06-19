@@ -2861,3 +2861,212 @@ def test_check_again():
     free(deg_fixe_ca); free(sg_ca); free(temp_ca)
 
     return ok
+
+def test_fit_kernel():
+    import sys, copy
+    from pyhotpants.numutils import fit_kernel_numpy
+    ok = True
+    seeds = [700, 701, 702]
+
+    cdef int fwKernel = 7, hwKernel = 3
+    cdef int fwKSStamp = 7, hwKSStamp = 3
+    cdef int fk_ngauss = 1
+    cdef int kerOrder = 1, bgOrder = 1
+    cdef int nKSStamps = 3
+    cdef int fk_rPixX = 60, fk_rPixY = 60
+    cdef int fk_usePCA = 0
+    cdef float fk_fillVal = -999.0
+    cdef float fk_statSig = 3.0
+    cdef float fk_kerSigReject = 2.0
+    cdef int nS = 5
+
+    deg_fixe_np = np.array([2], dtype=np.int32)
+    sigma_gauss_np = np.array([0.5], dtype=np.float32)
+
+    cdef int fk_nCompKer = 0
+    cdef int ig_fk
+    for ig_fk in range(fk_ngauss):
+        fk_nCompKer += (int(deg_fixe_np[ig_fk]) + 1) * (int(deg_fixe_np[ig_fk]) + 2) // 2
+    cdef int fk_nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int fk_nVec = fk_nCompKer + fk_nBGVectors
+    cdef int fk_nC = fk_nCompKer + fk_nBGVectors + 1
+    cdef int fk_fwSq = fwKSStamp * fwKSStamp
+    cdef int fk_totalPix = fk_rPixX * fk_rPixY
+    cdef int fk_kv_total = fk_nCompKer * fwKernel
+    cdef int fk_sub_width = fwKSStamp + fwKernel - 1
+
+    cdef int fk_ncomp1 = fk_nCompKer - 1
+    cdef int fk_ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    cdef int fk_nbg_vec = fk_nBGVectors
+    cdef int fk_mat_size = fk_ncomp1 * fk_ncomp2 + fk_nbg_vec + 1
+    cdef int fk_solSize = fk_ncomp1 * fk_ncomp2 + fk_nbg_vec + 2
+
+    cdef int *deg_fixe_fk = numpy_to_int_ptr(deg_fixe_np)
+    cdef float *sg_fk = numpy_to_float_ptr(sigma_gauss_np)
+    cdef double *fx_fk = <double*>calloc(fk_kv_total, sizeof(double))
+    cdef double *fy_fk = <double*>calloc(fk_kv_total, sizeof(double))
+    cdef double **kvec_fk = <double**>calloc(fk_nCompKer, sizeof(double*))
+    getKernelVec(fk_ngauss, deg_fixe_fk, kvec_fk, 0, fwKernel, hwKernel, sg_fk, fx_fk, fy_fk, NULL)
+    fx_np = double_ptr_to_numpy(fx_fk, fk_kv_total)
+    fy_np = double_ptr_to_numpy(fy_fk, fk_kv_total)
+
+    cdef float *temp_fk = <float*>calloc(fk_sub_width * fwKSStamp, sizeof(float))
+
+    stamp_positions = [
+        (15, 15), (30, 15), (45, 15), (15, 35), (30, 35)
+    ]
+
+    cdef int seedIdx_fk, si_fk, sj_fk, kvi_fk
+    cdef stamp_struct *stamps_c_fk = NULL
+    cdef stamp_struct *stamps_c_fk2 = NULL
+    cdef float *imConv_fk = NULL
+    cdef float *imRef_fk = NULL
+    cdef float *imNoise_fk = NULL
+    cdef float *imConv_fk2 = NULL
+    cdef float *imRef_fk2 = NULL
+    cdef float *imNoise_fk2 = NULL
+    cdef int *mRData_fk = NULL
+    cdef int *mRData_fk2 = NULL
+    cdef double *kernelSol_fk = NULL
+    cdef int *indx_fk = NULL
+    cdef double meansig_fk, scatter_fk
+    cdef int nskipped_fk
+
+    for seedIdx_fk in range(3):
+        np.random.seed(seeds[seedIdx_fk])
+
+        imConv_np = np.random.randn(fk_totalPix).astype(np.float32) * 10 + 100
+        imRef_np = np.random.randn(fk_totalPix).astype(np.float32) * 10 + 100
+        imNoise_np = (np.abs(np.random.randn(fk_totalPix).astype(np.float32)) * 0.5 + 1.0).astype(np.float32)
+        mRData_np = np.zeros(fk_totalPix, dtype=np.int32)
+
+        stamps_c_fk = <stamp_struct*>calloc(nS, sizeof(stamp_struct))
+        imConv_fk = numpy_to_float_ptr(imConv_np)
+        imRef_fk = numpy_to_float_ptr(imRef_np)
+        mRData_fk = numpy_to_int_ptr(mRData_np)
+
+        for si_fk in range(nS):
+            allocateStamps(&stamps_c_fk[si_fk], 1, bgOrder, fk_nCompKer, fwKSStamp, fk_nC, nKSStamps)
+            stamps_c_fk[si_fk].x0 = stamp_positions[si_fk][0] - hwKSStamp - hwKernel
+            stamps_c_fk[si_fk].y0 = stamp_positions[si_fk][1] - hwKSStamp - hwKernel
+            stamps_c_fk[si_fk].x = stamp_positions[si_fk][0]
+            stamps_c_fk[si_fk].y = stamp_positions[si_fk][1]
+            stamps_c_fk[si_fk].nx = fk_sub_width
+            stamps_c_fk[si_fk].ny = fk_sub_width
+            stamps_c_fk[si_fk].nss = nKSStamps
+            stamps_c_fk[si_fk].sscnt = 0
+            for sj_fk in range(nKSStamps):
+                stamps_c_fk[si_fk].xss[sj_fk] = stamp_positions[si_fk][0] + sj_fk * 2
+                stamps_c_fk[si_fk].yss[sj_fk] = stamp_positions[si_fk][1] + sj_fk * 2
+            fillStamp(&stamps_c_fk[si_fk], imConv_fk, imRef_fk, fk_rPixX, fk_rPixY, 0,
+                       fk_ngauss, deg_fixe_fk, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                       bgOrder, fk_nCompKer, kerOrder, fk_usePCA, fx_fk, fy_fk, temp_fk, NULL, fk_fillVal, mRData_fk)
+
+        py_stamps = []
+        for si_fk in range(nS):
+            py_stamps.append(stamp_c_to_dict(&stamps_c_fk[si_fk], fk_nCompKer, fk_nBGVectors, fwKSStamp, fk_nC, nKSStamps))
+        mRData_py_np = int_ptr_to_numpy(mRData_fk, fk_totalPix).copy()
+
+        stamps_c_fk2 = <stamp_struct*>calloc(nS, sizeof(stamp_struct))
+        for si_fk in range(nS):
+            dict_to_stamp_c(py_stamps[si_fk], &stamps_c_fk2[si_fk], fk_nCompKer, fk_nBGVectors, fwKSStamp, fk_nC, nKSStamps)
+
+        imConv_fk2 = numpy_to_float_ptr(imConv_np)
+        imRef_fk2 = numpy_to_float_ptr(imRef_np)
+        imNoise_fk2 = numpy_to_float_ptr(imNoise_np)
+        mRData_fk2 = numpy_to_int_ptr(mRData_py_np)
+
+        kernelSol_fk = <double*>calloc(fk_solSize, sizeof(double))
+        indx_fk = <int*>calloc(fk_mat_size + 1, sizeof(int))
+
+        meansig_fk = 0; scatter_fk = 0; nskipped_fk = 0
+        fitKernel(stamps_c_fk2, imRef_fk2, imConv_fk2, imNoise_fk2,
+                  kernelSol_fk, &meansig_fk, &scatter_fk, &nskipped_fk,
+                  fk_nCompKer, kerOrder, bgOrder, 0, nS,
+                  indx_fk, fwKSStamp, hwKSStamp, fk_rPixX, fk_rPixY,
+                  b"v", fk_kerSigReject, fk_statSig,
+                  mRData_fk2, temp_fk, fk_ngauss, deg_fixe_fk,
+                  hwKernel, fwKernel, fk_usePCA, fx_fk, fy_fk, NULL, fk_fillVal)
+
+        c_kernelSol = double_ptr_to_numpy(kernelSol_fk, fk_solSize)
+        c_meansig = meansig_fk
+        c_scatter = scatter_fk
+        c_nskipped = nskipped_fk
+
+        py_stamps_copy = copy.deepcopy(py_stamps)
+        mRData_py_copy = mRData_py_np.copy()
+
+        py_result = fit_kernel_numpy(
+            py_stamps_copy, imRef_np, imConv_np, imNoise_np,
+            fk_nCompKer, kerOrder, bgOrder, 0, nS,
+            fwKSStamp, hwKSStamp, fk_rPixX, fk_rPixY, "v",
+            float(fk_kerSigReject), float(fk_statSig),
+            mRData_py_copy, fk_ngauss, deg_fixe_np,
+            hwKernel, fwKernel, fk_usePCA, fx_np, fy_np, None, float(fk_fillVal))
+
+        seed_ok = True
+
+        ksol_maxdiff = float(np.max(np.abs(c_kernelSol - py_result['kernelSol'])))
+        ksol_denom = max(float(np.max(np.abs(c_kernelSol))), 1.0)
+        ksol_reldiff = ksol_maxdiff / ksol_denom
+        sys.stderr.write(f"  seed={seeds[seedIdx_fk]} kernelSol max_diff={ksol_maxdiff:.2e} rel={ksol_reldiff:.2e}")
+        if ksol_reldiff > 1e-5:
+            sys.stderr.write(f" FAIL\n")
+            seed_ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        meansig_diff = abs(c_meansig - py_result['meansigSubstamps'])
+        meansig_reldiff = meansig_diff / max(abs(c_meansig), 1.0)
+        sys.stderr.write(f"  seed={seeds[seedIdx_fk]} meansig C={c_meansig:.6e} py={py_result['meansigSubstamps']:.6e} rel={meansig_reldiff:.2e}")
+        if meansig_reldiff > 1e-5:
+            sys.stderr.write(" FAIL\n")
+            seed_ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        scatter_diff = abs(c_scatter - py_result['scatterSubstamps'])
+        scatter_reldiff = scatter_diff / max(abs(c_scatter), 1.0)
+        sys.stderr.write(f"  seed={seeds[seedIdx_fk]} scatter C={c_scatter:.6e} py={py_result['scatterSubstamps']:.6e} rel={scatter_reldiff:.2e}")
+        if scatter_reldiff > 1e-5:
+            sys.stderr.write(" FAIL\n")
+            seed_ok = False
+        else:
+            sys.stderr.write(" PASS\n")
+
+        if c_nskipped != py_result['NskippedSubstamps']:
+            sys.stderr.write(f"  seed={seeds[seedIdx_fk]} nskipped FAIL: C={c_nskipped}, py={py_result['NskippedSubstamps']}\n")
+            seed_ok = False
+        else:
+            sys.stderr.write(f"  seed={seeds[seedIdx_fk]} nskipped={c_nskipped} PASS\n")
+
+        for si_fk in range(nS):
+            c_dict_fk = stamp_c_to_dict(&stamps_c_fk2[si_fk], fk_nCompKer, fk_nBGVectors, fwKSStamp, fk_nC, nKSStamps)
+            if c_dict_fk['sscnt'] != py_result['stamps'][si_fk]['sscnt']:
+                sys.stderr.write(f"  seed={seeds[seedIdx_fk]} stamp[{si_fk}].sscnt FAIL: C={c_dict_fk['sscnt']}, py={py_result['stamps'][si_fk]['sscnt']}\n")
+                seed_ok = False
+
+        if seed_ok:
+            sys.stderr.write(f"  seed={seeds[seedIdx_fk]} fitKernel PASS\n")
+        else:
+            ok = False
+
+        sys.stderr.flush()
+
+        free(kernelSol_fk); free(indx_fk)
+        free(imConv_fk2); free(imRef_fk2); free(imNoise_fk2)
+        free(mRData_fk2)
+        free(imConv_fk); free(imRef_fk); free(mRData_fk)
+        for si_fk in range(nS):
+            freeStampMem(&stamps_c_fk[si_fk], 1, fk_nCompKer, fk_nBGVectors, fk_nC)
+            freeStampMem(&stamps_c_fk2[si_fk], 1, fk_nCompKer, fk_nBGVectors, fk_nC)
+        free(stamps_c_fk)
+        free(stamps_c_fk2)
+
+    for kvi_fk in range(fk_nCompKer):
+        if kvec_fk[kvi_fk] != NULL:
+            free(kvec_fk[kvi_fk])
+    free(kvec_fk); free(fx_fk); free(fy_fk)
+    free(deg_fixe_fk); free(sg_fk); free(temp_fk)
+
+    return ok

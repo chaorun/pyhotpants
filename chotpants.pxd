@@ -167,6 +167,7 @@ cdef extern from "functions.h":
     void getStampSig(stamp_struct *, double *, float *, double *, double *, double *, int, int, int, int, int *, char *, float *, float, int, int, int)
     double check_stamps(stamp_struct *, int, float *, float *, int, int, int, int, int, int *, double **, double *, double *, char *, char *, float, float, int, int, int, int, int, double **, double *, double *, int *, float *)
     char check_again(stamp_struct *, double *, float *, float *, float *, double *, double *, int *, int, int, char *, float, float, int, int, int, int, int *, float *, int, int, int, int, int *, int, int, int, double *, double *, float **, float)
+    void fitKernel(stamp_struct *, float *, float *, float *, double *, double *, double *, int *, int, int, int, int, int, int *, int, int, int, int, char *, float, float, int *, float *, int, int *, int, int, int, double *, double *, float **, float)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(
