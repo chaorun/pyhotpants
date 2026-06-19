@@ -141,6 +141,87 @@ def region_setup_numpy(tmpl_2d, sci_2d, tnoise_2d, inoise_2d, tmask_2d, imask_2d
         'rPixX': rPixX, 'rPixY': rPixY,
     }
 
+cdef dict stamp_c_to_dict(stamp_struct *s, int nCompKer, int nBGVectors, int fwKSStamp, int nC, int nKSStamps):
+    cdef int j, k
+    cdef int nVec = nCompKer + nBGVectors
+    cdef int fwSq = fwKSStamp * fwKSStamp
+    xss_arr = np.array([s.xss[j] for j in range(nKSStamps)], dtype=np.int32) if s.xss != NULL else np.zeros(nKSStamps, dtype=np.int32)
+    yss_arr = np.array([s.yss[j] for j in range(nKSStamps)], dtype=np.int32) if s.yss != NULL else np.zeros(nKSStamps, dtype=np.int32)
+    krefArea_arr = np.array([s.krefArea[j] for j in range(fwSq)], dtype=np.float64) if s.krefArea != NULL else np.zeros(fwSq, dtype=np.float64)
+    scprod_arr = np.array([s.scprod[j] for j in range(nC)], dtype=np.float64) if s.scprod != NULL else np.zeros(nC, dtype=np.float64)
+    if s.vectors != NULL:
+        vecs = np.zeros((nVec, fwSq), dtype=np.float64)
+        for j in range(nVec):
+            if s.vectors[j] != NULL:
+                for k in range(fwSq):
+                    vecs[j, k] = s.vectors[j][k]
+    else:
+        vecs = np.zeros((nVec, fwSq), dtype=np.float64)
+    if s.mat != NULL:
+        mat_arr = np.zeros((nC, nC), dtype=np.float64)
+        for j in range(nC):
+            if s.mat[j] != NULL:
+                for k in range(nC):
+                    mat_arr[j, k] = s.mat[j][k]
+    else:
+        mat_arr = np.zeros((nC, nC), dtype=np.float64)
+    return {
+        'x0': s.x0, 'y0': s.y0,
+        'x': s.x, 'y': s.y,
+        'nx': s.nx, 'ny': s.ny,
+        'nss': s.nss, 'sscnt': s.sscnt,
+        'xss': xss_arr, 'yss': yss_arr,
+        'krefArea': krefArea_arr,
+        'scprod': scprod_arr,
+        'vectors': vecs,
+        'mat': mat_arr,
+        'chi2': s.chi2, 'norm': s.norm, 'diff': s.diff,
+        'sum': s.sum, 'mean': s.mean, 'median': s.median,
+        'mode': s.mode, 'sd': s.sd,
+        'fwhm': s.fwhm, 'lfwhm': s.lfwhm,
+    }
+
+cdef void dict_to_stamp_c(dict d, stamp_struct *s, int nCompKer, int nBGVectors, int fwKSStamp, int nC, int nKSStamps):
+    cdef int j, k
+    cdef int nVec = nCompKer + nBGVectors
+    cdef int fwSq = fwKSStamp * fwKSStamp
+    s.x0 = d['x0']; s.y0 = d['y0']
+    s.x = d['x']; s.y = d['y']
+    s.nx = d['nx']; s.ny = d['ny']
+    s.nss = d['nss']; s.sscnt = d['sscnt']
+    s.chi2 = d['chi2']; s.norm = d['norm']; s.diff = d['diff']
+    s.sum = d['sum']; s.mean = d['mean']; s.median = d['median']
+    s.mode = d['mode']; s.sd = d['sd']
+    s.fwhm = d['fwhm']; s.lfwhm = d['lfwhm']
+    s.xss = <int*>malloc(nKSStamps * sizeof(int))
+    xss_np = np.asarray(d['xss'], dtype=np.int32).ravel()
+    for j in range(nKSStamps):
+        s.xss[j] = xss_np[j]
+    s.yss = <int*>malloc(nKSStamps * sizeof(int))
+    yss_np = np.asarray(d['yss'], dtype=np.int32).ravel()
+    for j in range(nKSStamps):
+        s.yss[j] = yss_np[j]
+    s.krefArea = <double*>malloc(fwSq * sizeof(double))
+    kref_np = np.asarray(d['krefArea'], dtype=np.float64).ravel()
+    for j in range(fwSq):
+        s.krefArea[j] = kref_np[j]
+    s.scprod = <double*>malloc(nC * sizeof(double))
+    scprod_np = np.asarray(d['scprod'], dtype=np.float64).ravel()
+    for j in range(nC):
+        s.scprod[j] = scprod_np[j]
+    s.vectors = <double**>malloc(nVec * sizeof(double*))
+    vecs_np = np.asarray(d['vectors'], dtype=np.float64)
+    for j in range(nVec):
+        s.vectors[j] = <double*>malloc(fwSq * sizeof(double))
+        for k in range(fwSq):
+            s.vectors[j][k] = vecs_np[j, k]
+    s.mat = <double**>malloc(nC * sizeof(double*))
+    mat_np = np.asarray(d['mat'], dtype=np.float64)
+    for j in range(nC):
+        s.mat[j] = <double*>malloc(nC * sizeof(double))
+        for k in range(nC):
+            s.mat[j][k] = mat_np[j, k]
+
 def hotpants(
     inim, tmplim,
     tni=None, ini=None, tmi=None, imi=None,
@@ -577,3 +658,99 @@ def hotpants(
         free(pca_ptr)
 
     return diff_out, noise_out, conv_out, mask_out, stats_list
+
+def test_stamp_roundtrip():
+    cdef int nCompKer = 3
+    cdef int bgOrder = 1
+    cdef int nBGVectors = (bgOrder + 1) * (bgOrder + 2) // 2
+    cdef int fwKSStamp = 5
+    cdef int nC = 6
+    cdef int nKSStamps = 10
+    cdef int nVec = nCompKer + nBGVectors
+    cdef int fwSq = fwKSStamp * fwKSStamp
+    cdef int j, k
+
+    cdef stamp_struct *orig = <stamp_struct*>calloc(1, sizeof(stamp_struct))
+    allocateStamps(orig, 1, bgOrder, nCompKer, fwKSStamp, nC, nKSStamps)
+
+    orig.x0 = 10; orig.y0 = 20
+    orig.x = 30; orig.y = 40
+    orig.nx = 50; orig.ny = 60
+    orig.nss = nKSStamps; orig.sscnt = 7
+    orig.chi2 = 1.23; orig.norm = 4.56; orig.diff = 7.89
+    orig.sum = 10.1; orig.mean = 11.2; orig.median = 12.3
+    orig.mode = 13.4; orig.sd = 14.5
+    orig.fwhm = 15.6; orig.lfwhm = 16.7
+
+    for j in range(nKSStamps):
+        orig.xss[j] = j * 3 + 1
+        orig.yss[j] = j * 5 + 2
+
+    for j in range(fwSq):
+        orig.krefArea[j] = <double>(j * 0.1 + 0.01)
+
+    for j in range(nC):
+        orig.scprod[j] = <double>(j * 0.5 + 0.05)
+
+    for j in range(nVec):
+        for k in range(fwSq):
+            orig.vectors[j][k] = <double>(j * 100.0 + k * 0.7)
+
+    for j in range(nC):
+        for k in range(nC):
+            orig.mat[j][k] = <double>(j * 10.0 + k * 1.1)
+
+    d = stamp_c_to_dict(orig, nCompKer, nBGVectors, fwKSStamp, nC, nKSStamps)
+
+    cdef stamp_struct *rt = <stamp_struct*>calloc(1, sizeof(stamp_struct))
+    dict_to_stamp_c(d, rt, nCompKer, nBGVectors, fwKSStamp, nC, nKSStamps)
+
+    cdef bint ok = True
+    if orig.x0 != rt.x0 or orig.y0 != rt.y0: ok = False
+    if orig.x != rt.x or orig.y != rt.y: ok = False
+    if orig.nx != rt.nx or orig.ny != rt.ny: ok = False
+    if orig.nss != rt.nss or orig.sscnt != rt.sscnt: ok = False
+    if orig.chi2 != rt.chi2 or orig.norm != rt.norm or orig.diff != rt.diff: ok = False
+    if orig.sum != rt.sum or orig.mean != rt.mean or orig.median != rt.median: ok = False
+    if orig.mode != rt.mode or orig.sd != rt.sd: ok = False
+    if orig.fwhm != rt.fwhm or orig.lfwhm != rt.lfwhm: ok = False
+
+    for j in range(nKSStamps):
+        if orig.xss[j] != rt.xss[j]: ok = False
+        if orig.yss[j] != rt.yss[j]: ok = False
+
+    for j in range(fwSq):
+        if orig.krefArea[j] != rt.krefArea[j]: ok = False
+
+    for j in range(nC):
+        if orig.scprod[j] != rt.scprod[j]: ok = False
+
+    for j in range(nVec):
+        for k in range(fwSq):
+            if orig.vectors[j][k] != rt.vectors[j][k]: ok = False
+
+    for j in range(nC):
+        for k in range(nC):
+            if orig.mat[j][k] != rt.mat[j][k]: ok = False
+
+    for j in range(nVec):
+        if orig.vectors[j] != NULL: free(orig.vectors[j])
+    free(orig.vectors)
+    for j in range(nC):
+        if orig.mat[j] != NULL: free(orig.mat[j])
+    free(orig.mat)
+    free(orig.krefArea); free(orig.scprod)
+    free(orig.xss); free(orig.yss)
+    free(orig)
+
+    for j in range(nVec):
+        if rt.vectors[j] != NULL: free(rt.vectors[j])
+    free(rt.vectors)
+    for j in range(nC):
+        if rt.mat[j] != NULL: free(rt.mat[j])
+    free(rt.mat)
+    free(rt.krefArea); free(rt.scprod)
+    free(rt.xss); free(rt.yss)
+    free(rt)
+
+    return ok

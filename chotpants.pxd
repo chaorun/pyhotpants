@@ -1,6 +1,26 @@
 cdef extern from "hotpants_globals.h":
     ctypedef struct stamp_struct:
-        pass
+        int x0, y0
+        int x, y
+        int nx, ny
+        int *xss
+        int *yss
+        int nss
+        int sscnt
+        double **vectors
+        double *krefArea
+        double **mat
+        double *scprod
+        double sum
+        double mean
+        double median
+        double mode
+        double sd
+        double fwhm
+        double lfwhm
+        double chi2
+        double norm
+        double diff
 
     ctypedef struct savexy_entry:
         int x, y
@@ -113,6 +133,7 @@ cdef extern from "hotpants_compute.h":
 
 cdef extern from "functions.h":
     int allocateStamps(stamp_struct *, int, int, int, int, int, int)
+    double ran1(int *idum)
 
 cdef extern from "hotpants_compute.h":
     int hotpants_compute(

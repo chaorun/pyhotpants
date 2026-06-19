@@ -131,3 +131,97 @@ numpy 数组由 Python GC 管理，不再需要手动 free。
 - C 端：replay 工具验证 EXACT MATCH
 - Python 端：dump py_input.bin + py_output.bin，与 C 端 cmp 对比
 - 影子执行：numpy 版本与 C 版本逐数组 assert_array_equal
+
+## Phase 3a 完成记录
+
+region_setup 已切换为 numpy 主路径：
+- numpy 计算 7 个数据数组 → malloc + memcpy 到 C 内存
+- stamps/kerSol 由 Cython calloc + C allocateStamps 分配
+- C 的 region_setup 作为影子验证（已验证逐字节一致）
+- INPUT + OUTPUT EXACT MATCH
+
+## Phase 3b — region_output numpy 化
+
+### 架构原则
+
+严格的 Python/C 边界分离：
+
+```
+Cython 胶水层:
+  C struct → Python dict/array    (输入转换)
+  纯 Python/numpy 函数()           (零 C 调用)
+  Python result → C struct         (输出转换)
+  freeStampMem 等 C 清理           (外部执行)
+```
+
+每个 numpy 化函数内部只有纯 Python/numpy 代码，不调用任何 C 函数。
+
+### 前置任务
+
+#### Step 0: 读取源码（已完成）
+
+stamp_struct 完整定义（hotpants_globals.h）：
+```c
+typedef struct {
+   int       x0, y0;       // stamp 在 region 中的起点
+   int       x, y;         // stamp 在 region 中的中心
+   int       nx, ny;       // stamp 大小
+   int       *xss;         // substamp 中心 x 坐标数组
+   int       *yss;         // substamp 中心 y 坐标数组
+   int       nss;          // substamp 数量 (1..nss)
+   int       sscnt;        // 当前使用的 substamp 索引 (0..nss-1)
+   double    **vectors;    // 卷积图像数据
+   double    *krefArea;    // kernel substamp 数据
+   double    **mat;        // 拟合矩阵
+   double    *scprod;      // kernel sum solution
+   double    sum, mean, median, mode, sd, fwhm, lfwhm;  // 统计量
+   double    chi2;         // 拟合残差
+   double    norm;         // kernel sum
+   double    diff;         // (norm - mean_ksum) * sqrt(sum)
+} stamp_struct;
+```
+
+ran1 常量（Numerical Recipes 三线性同余生成器）：
+```
+M1=259200  IA1=7141  IC1=54773  RM1=1/M1
+M2=134456  IA2=8121  IC2=28411  RM2=1/M2
+M3=243000  IA3=4561  IC3=51349
+```
+
+getStampStats3 中每次调用 idum=-666 重新初始化 ran1，序列完全确定性。
+
+#### Step 1: ran1 Python 实现
+
+翻译 C 的 ran1 为纯 Python 类，精确模拟 static 状态和整数运算。
+单元测试：调用 100 次，逐值对比 C 输出。
+
+#### Step 2: stamp_struct .pxd 完整声明 + C→Python 转换
+
+在 .pxd 中声明 stamp_struct 所有字段。
+编写 stamp_to_dict(stamp_struct *s) 转换函数。
+region_output 只读 stamp 字段（xss, yss, sscnt, nss），暂不需要回写。
+
+#### Step 3: region_output numpy 化
+
+翻译以下 C 函数为纯 Python/numpy：
+- insert_subregion_flt/int → numpy 切片赋值
+- getStampStats3 → numpy 直方图 + sigma_clip + ran1
+- getNoiseStats3 → numpy 运算
+- getFinalStampSig → numpy 运算（需要 stamp 的 xss/yss/sscnt）
+- sigma_clip → numpy 实现
+
+freeStampMem 在函数外由 Cython 胶水层调用 C 执行。
+
+#### Step 4: 影子验证
+
+numpy 为主路径，C 为影子，逐字节对比所有输出（diffOut, noiseOut, convOut, maskOut, stats）。
+
+#### Step 5: 切换
+
+确认一致后，注释掉 C 影子代码。
+
+### 已知难点
+
+1. getStampStats3 (275行)：直方图+随机采样+迭代，需要 ran1 一致性
+2. 数值精度：C float/double 隐式转换 vs numpy float32/float64
+3. 后续 buildstamps/fit/convolve_diff 的 stamp 双向转换更复杂（远期）
