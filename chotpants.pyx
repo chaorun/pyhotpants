@@ -1,6 +1,7 @@
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free, calloc
+from libc.string cimport memset
 import os, struct
 
 np.import_array()
@@ -198,32 +199,53 @@ def hotpants(
             _de("convOut", bytes(np.ascontiguousarray(conv_out)))
             _de("maskOut", bytes(np.ascontiguousarray(mask_out)))
 
-    hotpants_compute(
-        &tmpl_arr[0, 0], tNx, tNy,
-        &sci_arr[0, 0], iNx, iNy,
-        tni_ptr, ini_ptr, tmi_ptr, imi_ptr,
-        nR, &rxmins[0], &rxmaxs[0], &rymins[0], &rymaxs[0],
-        <int>r, <int>ng, &deg_arr[0], &sig_arr[0],
-        <int>ko, <int>bgo,
-        <int>nsx, <int>nsy, <int>nss, <int>rss,
-        <int>uss, <int>afssc,
-        <float>ft, <float>sft, <float>nft,
-        <float>ssig, <float>ks, <float>kfm,
-        <float>tu, <float>tl, <float>tg, <float>tr, <float>tp,
-        <float>iu, <float>il, <float>ig, <float>ir, <float>ip,
-        tuk_val, iuk_val,
-        <float>mins, <float>mous,
-        <float>fi, <float>fin,
-        c_str, n_str, fom_str,
-        <int>sconv, <int>okn, <int>convvar,
-        use_pca, pca_ptr,
-        xcmp_ptr, ycmp_ptr, ncmp,
-        <int>v, <int>kcs,
-        <int>savexy,
-        &diff_out[0, 0], &noise_out[0, 0], &conv_out[0, 0], &mask_out[0, 0],
-        oNx, oNy,
-        stats
-    )
+    cdef hotpants_context ctx
+    memset(&ctx, 0, sizeof(hotpants_context))
+    hotpants_init(&ctx, <int>r, <int>ng, &deg_arr[0], &sig_arr[0],
+                  <int>ko, <int>bgo, <int>nsx, <int>nsy, <int>nss, <int>rss,
+                  <int>uss, <float>ft, <int>kcs, tNx, tNy, iNx, iNy, nR)
+
+    cdef hotpants_params prm
+    memset(&prm, 0, sizeof(hotpants_params))
+    prm.tFullData = &tmpl_arr[0, 0]; prm.tNx = tNx; prm.tNy = tNy
+    prm.iFullData = &sci_arr[0, 0]; prm.iNx = iNx; prm.iNy = iNy
+    prm.tNoiseFullData = tni_ptr; prm.iNoiseFullData = ini_ptr
+    prm.tMaskFullData = tmi_ptr; prm.iMaskFullData = imi_ptr
+    prm.nR = nR
+    prm.rXMins = &rxmins[0]; prm.rXMaxs = &rxmaxs[0]
+    prm.rYMins = &rymins[0]; prm.rYMaxs = &rymaxs[0]
+    prm.hwKernel = <int>r; prm.ngauss = <int>ng
+    prm.deg_fixe = &deg_arr[0]; prm.sigma_gauss = &sig_arr[0]
+    prm.kerOrder = <int>ko; prm.bgOrder = <int>bgo
+    prm.findSSC = <int>afssc
+    prm.hwKSStamp = <int>rss; prm.nKSStamps = <int>nss
+    prm.kerFitThresh = <float>ft; prm.scaleFitThresh = <float>sft
+    prm.minFracGoodStamps = <float>nft
+    prm.statSig = <float>ssig; prm.kerSigReject = <float>ks; prm.kerFracMask = <float>kfm
+    prm.tUThresh = <float>tu; prm.tLThresh = <float>tl
+    prm.tGain = <float>tg; prm.tRdnoise = <float>tr; prm.tPedestal = <float>tp
+    prm.iUThresh = <float>iu; prm.iLThresh = <float>il
+    prm.iGain = <float>ig; prm.iRdnoise = <float>ir; prm.iPedestal = <float>ip
+    prm.tUKThresh = tuk_val; prm.iUKThresh = iuk_val
+    prm.kfSpreadMask1 = <float>mins; prm.kfSpreadMask2 = <float>mous
+    prm.fillVal = <float>fi; prm.fillValNoise = <float>fin
+    prm.forceConvolve = c_str; prm.photNormalize = n_str; prm.figMerit = fom_str
+    prm.sameConv = <int>sconv; prm.rescaleOK = <int>okn; prm.convolveVariance = <int>convvar
+    prm.usePCA = use_pca; prm.PCA = pca_ptr
+    prm.xcmp = xcmp_ptr; prm.ycmp = ycmp_ptr; prm.Ncmp = ncmp
+    prm.verbose = <int>v
+    prm.savexyflag = <int>savexy
+    prm.diffOut = &diff_out[0, 0]; prm.noiseOut = &noise_out[0, 0]
+    prm.convOut = &conv_out[0, 0]; prm.maskOut = &mask_out[0, 0]
+    prm.oNx = oNx; prm.oNy = oNy
+    prm.stats = stats
+
+    cdef char *localFC = c_str
+    cdef int ri
+    for ri in range(nR):
+        hotpants_process_region(&ctx, &prm, ri, &localFC)
+
+    hotpants_cleanup(&ctx)
 
     if dump_dir is not None:
         import struct as _st

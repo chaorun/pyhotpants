@@ -44,6 +44,44 @@ cdef extern from "hotpants_compute.h":
 
     void hotpants_cleanup(hotpants_context *ctx)
 
+    ctypedef struct hotpants_params:
+        float *tFullData
+        long tNx, tNy
+        float *iFullData
+        long iNx, iNy
+        float *tNoiseFullData, *iNoiseFullData
+        int *tMaskFullData, *iMaskFullData
+        int nR
+        int *rXMins, *rXMaxs, *rYMins, *rYMaxs
+        int hwKernel, ngauss
+        int *deg_fixe
+        float *sigma_gauss
+        int kerOrder, bgOrder
+        int findSSC
+        int hwKSStamp, nKSStamps
+        float kerFitThresh, scaleFitThresh, minFracGoodStamps
+        float statSig, kerSigReject, kerFracMask
+        float tUThresh, tLThresh, tGain, tRdnoise, tPedestal
+        float iUThresh, iLThresh, iGain, iRdnoise, iPedestal
+        float tUKThresh, iUKThresh
+        float kfSpreadMask1, kfSpreadMask2
+        float fillVal, fillValNoise
+        char *forceConvolve, *photNormalize, *figMerit
+        int sameConv, rescaleOK, convolveVariance
+        int usePCA
+        float **PCA
+        float *xcmp, *ycmp
+        int Ncmp
+        int verbose
+        int savexyflag
+        float *diffOut, *noiseOut, *convOut
+        int *maskOut
+        long oNx, oNy
+        region_stats *stats
+
+    int hotpants_process_region(hotpants_context *ctx, hotpants_params *p,
+        int region_idx, char **localForceConvolve)
+
     int hotpants_compute(
         float *tFullData, long tNx, long tNy,
         float *iFullData, long iNx, long iNy,
