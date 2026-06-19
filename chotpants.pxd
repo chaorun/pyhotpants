@@ -21,6 +21,29 @@ cdef extern from "hotpants_globals.h":
         long savexyXmin, savexyYmin
 
 cdef extern from "hotpants_compute.h":
+    ctypedef struct hotpants_context:
+        int nCompKer, nComp, nC, nCompBG, nBGVectors, nCompTotal
+        int fwKernel, fwStamp, fwKSStamp, sBorder
+        int nStamps, nStampX, nStampY
+        int xMin, yMin, xMax, yMax
+        float fitThresh
+        int kcStep
+        int *indx
+        float *temp
+        double *check_stack, *filter_x, *filter_y
+        double **kernel_vec
+        double *kernel_coeffs, *kernel
+        double **check_mat, *check_vec
+
+    int hotpants_init(hotpants_context *ctx,
+        int hwKernel, int ngauss, int *deg_fixe, float *sigma_gauss,
+        int kerOrder, int bgOrder,
+        int nStampX_in, int nStampY_in, int nKSStamps, int hwKSStamp,
+        int useFullSS, float kerFitThresh, int kcStep_in,
+        long tNx, long tNy, long iNx, long iNy, int nR)
+
+    void hotpants_cleanup(hotpants_context *ctx)
+
     int hotpants_compute(
         float *tFullData, long tNx, long tNy,
         float *iFullData, long iNx, long iNy,

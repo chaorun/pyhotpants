@@ -3,6 +3,61 @@
 
 #include "hotpants_globals.h"
 
+typedef struct {
+    int nCompKer, nComp, nC, nCompBG, nBGVectors, nCompTotal;
+    int fwKernel, fwStamp, fwKSStamp, sBorder;
+    int nStamps, nStampX, nStampY;
+    int xMin, yMin, xMax, yMax;
+    float fitThresh;
+    int kcStep;
+    int *indx;
+    float *temp;
+    double *check_stack, *filter_x, *filter_y;
+    double **kernel_vec;
+    double *kernel_coeffs, *kernel;
+    double **check_mat, *check_vec;
+} hotpants_context;
+
+int hotpants_init(hotpants_context *ctx,
+    int hwKernel, int ngauss, int *deg_fixe, float *sigma_gauss,
+    int kerOrder, int bgOrder,
+    int nStampX_in, int nStampY_in, int nKSStamps, int hwKSStamp,
+    int useFullSS, float kerFitThresh, int kcStep_in,
+    long tNx, long tNy, long iNx, long iNy, int nR);
+
+    void hotpants_cleanup(hotpants_context *ctx);
+
+typedef struct {
+    float *tFullData; long tNx, tNy;
+    float *iFullData; long iNx, iNy;
+    float *tNoiseFullData, *iNoiseFullData;
+    int *tMaskFullData, *iMaskFullData;
+    int nR; int *rXMins, *rXMaxs, *rYMins, *rYMaxs;
+    int hwKernel, ngauss; int *deg_fixe; float *sigma_gauss;
+    int kerOrder, bgOrder;
+    int findSSC;
+    int hwKSStamp, nKSStamps;
+    float kerFitThresh, scaleFitThresh, minFracGoodStamps;
+    float statSig, kerSigReject, kerFracMask;
+    float tUThresh, tLThresh, tGain, tRdnoise, tPedestal;
+    float iUThresh, iLThresh, iGain, iRdnoise, iPedestal;
+    float tUKThresh, iUKThresh;
+    float kfSpreadMask1, kfSpreadMask2;
+    float fillVal, fillValNoise;
+    char *forceConvolve, *photNormalize, *figMerit;
+    int sameConv, rescaleOK, convolveVariance;
+    int usePCA; float **PCA;
+    float *xcmp, *ycmp; int Ncmp;
+    int verbose;
+    int savexyflag;
+    float *diffOut, *noiseOut, *convOut; int *maskOut;
+    long oNx, oNy;
+    region_stats *stats;
+} hotpants_params;
+
+int hotpants_process_region(hotpants_context *ctx, hotpants_params *p,
+    int region_idx, char **localForceConvolve);
+
 int hotpants_compute(
     float *tFullData, long tNx, long tNy,
     float *iFullData, long iNx, long iNy,

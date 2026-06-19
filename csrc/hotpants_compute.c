@@ -5,6 +5,7 @@
 
 #include "defaults.h"
 #include "hotpants_globals.h"
+#include "hotpants_compute.h"
 #include "functions.h"
 
 static void dump_entry(FILE *fp, const char *name, const void *data, size_t nbytes) {
@@ -220,176 +221,173 @@ static void dmp_check_mat(FILE *fp, const char *name, double **mat, int nC) {
     fclose(_dfp); \
 } while(0)
 
-int hotpants_compute(
-    float *tFullData, long tNx, long tNy,
-    float *iFullData, long iNx, long iNy,
-    float *tNoiseFullData,
-    float *iNoiseFullData,
-    int *tMaskFullData,
-    int *iMaskFullData,
-    int nR, int *rXMins, int *rXMaxs, int *rYMins, int *rYMaxs,
+int hotpants_init(hotpants_context *ctx,
     int hwKernel, int ngauss, int *deg_fixe, float *sigma_gauss,
     int kerOrder, int bgOrder,
-    int nStampX, int nStampY, int nKSStamps, int hwKSStamp,
-    int useFullSS, int findSSC,
-    float kerFitThresh, float scaleFitThresh, float minFracGoodStamps,
-    float statSig, float kerSigReject, float kerFracMask,
-    float tUThresh, float tLThresh, float tGain, float tRdnoise, float tPedestal,
-    float iUThresh, float iLThresh, float iGain, float iRdnoise, float iPedestal,
-    float tUKThresh, float iUKThresh,
-    float kfSpreadMask1, float kfSpreadMask2,
-    float fillVal, float fillValNoise,
-    char *forceConvolve, char *photNormalize, char *figMerit,
-    int sameConv, int rescaleOK, int convolveVariance,
-    int usePCA, float **PCA,
-    float *xcmp, float *ycmp, int Ncmp,
-    int verbose, int kcStep,
-    int savexyflag,
-    float *diffOut, float *noiseOut, float *convOut, int *maskOut,
-    long oNx, long oNy,
-    region_stats *stats
-) {
-    const char *dump_dir = getenv("HOTPANTS_DUMP_DIR");
-    int         i,j,k,l,m;
-    double      sumKernel;
-    double      meansigSubstamps,scatterSubstamps;
-    double      meansigSubstampsF,scatterSubstampsF;
-    // double      meanksumSubstamps,scatterksumSubstamps;
-    int         NskippedSubstamps;
+    int nStampX_in, int nStampY_in, int nKSStamps, int hwKSStamp,
+    int useFullSS, float kerFitThresh, int kcStep_in,
+    long tNx, long tNy, long iNx, long iNy, int nR)
+{
+    int i;
+    ctx->nCompKer = 0;
+    for (i = 0; i < ngauss; i++)
+        ctx->nCompKer += ((deg_fixe[i] + 1) * (deg_fixe[i] + 2)) / 2;
 
-    float *tRData = NULL;
-    double tMerit=0;
-    double *tKerSol = NULL;
-    stamp_struct *ctStamps = NULL;
+    ctx->nComp      = ((kerOrder + 1) * (kerOrder + 2)) / 2;
+    ctx->nC         = ctx->nCompKer + 2;
+    ctx->nCompBG    = (ctx->nCompKer - 1) * ctx->nComp + 1;
+    ctx->nBGVectors = ((bgOrder + 1) * (bgOrder + 2)) / 2;
+    ctx->nCompTotal = ctx->nCompKer * ctx->nComp + ctx->nBGVectors;
 
-    float *iRData = NULL;
-    double iMerit=0;
-    double *iKerSol = NULL;
-    stamp_struct *ciStamps = NULL;
-
-    float *oRData = NULL;
-    float *eRData = NULL;
-
-    int      *misRData = NULL;
-    int      *mtsRData = NULL;
-
-    int xMin, yMin, xMax, yMax;
-
-    int rXMin, rYMin, rXMax, rYMax;
-    int rXBMin, rYBMin, rXBMax, rYBMax;
-    int xBufLo, xBufHi, yBufLo, yBufHi;
-
-    int sXMin, sYMin, sXMax, sYMax;
-    int niS, ntS;
-
-    int convTmpl;
-
-    int fpixelOutX, fpixelOutY, lpixelOutX, lpixelOutY;
-    // int anynul;
-    int status = 0;
-    // int kInfoNum;
-    int nx2norm;
-
-    double sum,  mean,  median,  mode,  sd,  fwhm,  lfwhm, diffrat, x2norm;
-    double summ, meanm, medianm, modem, sdm, fwhmm, lfwhmm;
-    double nsum,  nmean,  nmedian,  nmode,  nsd,  nfwhm, nlfwhm;
-    double nsumm, nmeanm, nmedianm, nmodem, nsdm, nfwhmm, nlfwhmm;
-
-    float iSFrac, tSFrac;
-    float fitThresh;
-    int flag;
-    double inv1;
-    int sBorder;
-
-    int rPixX, rPixY;
-    int nStamps, nS, nCompKer, nC;
-    int nComp, nCompBG, nBGVectors, nCompTotal;
-    int fwKernel, fwStamp, fwKSStamp;
-    int *indx = NULL;
-    float *temp = NULL, *temp2 = NULL;
-    double *check_stack = NULL, *filter_x = NULL, *filter_y = NULL;
-    double **kernel_vec = NULL;
-    double *kernel_coeffs = NULL, *kernel = NULL;
-    double **check_mat = NULL, *check_vec = NULL;
-    int *mRData = NULL;
-    char *localForceConvolve = forceConvolve;
-
-    nCompKer = 0;
-    for(i = 0; i < ngauss; i++)
-        nCompKer += ((deg_fixe[i] + 1) * (deg_fixe[i] + 2)) / 2;
-
-    nComp       = ((kerOrder + 1) * (kerOrder + 2)) / 2;
-    nC          = nCompKer + 2;
-    nCompBG     = (nCompKer - 1) * nComp + 1;
-    nBGVectors  = ((bgOrder + 1) * (bgOrder + 2)) / 2;
-    nCompTotal  = nCompKer * nComp + nBGVectors;
-
-    fwKernel    = hwKernel * 2 + 1;
+    ctx->fwKernel   = hwKernel * 2 + 1;
+    ctx->nStampX    = nStampX_in;
+    ctx->nStampY    = nStampY_in;
 
     if (useFullSS) {
-        fwKSStamp   = fwKernel;
-        fwStamp     = fwKernel;
-        nStampX     = (int)(imin(tNx, iNx) / nR / fwStamp);
-        nStampY     = (int)(imin(tNy, iNy) / nR / fwStamp);
-        fprintf(stderr, "Using maximial number of stamps : %d x %d\n", nStampX, nStampY);
-    }
-    else {
-        fwKSStamp   = hwKSStamp * 2 + 1;
+        ctx->fwKSStamp = ctx->fwKernel;
+        ctx->fwStamp   = ctx->fwKernel;
+        ctx->nStampX   = (int)(imin(tNx, iNx) / nR / ctx->fwStamp);
+        ctx->nStampY   = (int)(imin(tNy, iNy) / nR / ctx->fwStamp);
+        fprintf(stderr, "Using maximial number of stamps : %d x %d\n", ctx->nStampX, ctx->nStampY);
+    } else {
+        ctx->fwKSStamp = hwKSStamp * 2 + 1;
+        ctx->fwStamp = imin( imin(tNx, iNx) / (int)sqrt((double)nR) / ctx->nStampX,
+                             imin(tNy, iNy) / (int)sqrt((double)nR) / ctx->nStampY );
+        ctx->fwStamp -= ctx->fwKernel;
+        ctx->fwStamp -= ctx->fwStamp % 2 == 0 ? 1 : 0;
 
-        fwStamp = imin( imin(tNx, iNx) / (int)sqrt((double)nR) / nStampX,
-                        imin(tNy, iNy) / (int)sqrt((double)nR) / nStampY );
-        fwStamp -= fwKernel;
-        fwStamp -= fwStamp % 2 == 0 ? 1 : 0;
-
-        if (fwStamp < fwKSStamp) {
-            fwStamp  = fwKSStamp+fwKernel;
-            fwStamp -= fwStamp % 2 == 0 ? 1 : 0;
-
-            nStampX = imin(tNx, iNx) / (int)sqrt((double)nR) / fwStamp;
-            nStampY = imin(tNy, iNy) / (int)sqrt((double)nR) / fwStamp;
-
+        if (ctx->fwStamp < ctx->fwKSStamp) {
+            ctx->fwStamp  = ctx->fwKSStamp + ctx->fwKernel;
+            ctx->fwStamp -= ctx->fwStamp % 2 == 0 ? 1 : 0;
+            ctx->nStampX = imin(tNx, iNx) / (int)sqrt((double)nR) / ctx->fwStamp;
+            ctx->nStampY = imin(tNy, iNy) / (int)sqrt((double)nR) / ctx->fwStamp;
             fprintf(stderr, "WARNING : too many stamps requested\n");
-            fprintf(stderr, "          using nsx = %d, nsy = %d\n", nStampX, nStampY);
+            fprintf(stderr, "          using nsx = %d, nsy = %d\n", ctx->nStampX, ctx->nStampY);
         }
-
     }
 
-    kcStep  = kcStep ? kcStep : fwKernel;
-
-    nStamps = nStampX * nStampY;
-    sBorder = hwKSStamp + hwKernel;
+    ctx->kcStep  = kcStep_in ? kcStep_in : ctx->fwKernel;
+    ctx->nStamps = ctx->nStampX * ctx->nStampY;
+    ctx->sBorder = hwKSStamp + hwKernel;
 
     fprintf(stderr, "Mallocing massive amounts of memory...\n");
 
-    if ( !(temp    = (float *)calloc((fwKSStamp+fwKernel)*fwKSStamp, sizeof(float))) ||
-         !(indx    = (int *)calloc((nCompTotal+1+100), sizeof(int))) ||
-
-         !(kernel        = (double *)calloc(fwKernel*fwKernel, sizeof(double))) ||
-         !(kernel_coeffs = (double *)calloc(nCompKer, sizeof(double))) ||
-
-         !(kernel_vec = (double **)calloc(nCompKer, sizeof(double *))) ||
-
-         !(filter_x   = (double *)calloc(nCompKer*fwKernel, sizeof(double))) ||
-         !(filter_y   = (double *)calloc(nCompKer*fwKernel, sizeof(double))) ||
-
-         !(check_mat   = (double **)calloc(nC, sizeof(double *))) ||
-         !(check_vec   = (double *)calloc(nC, sizeof(double))) ||
-         !(check_stack = (double *)calloc(nStamps, sizeof(double))) ) {
+    if ( !(ctx->temp          = (float *)calloc((ctx->fwKSStamp+ctx->fwKernel)*ctx->fwKSStamp, sizeof(float))) ||
+         !(ctx->indx          = (int *)calloc((ctx->nCompTotal+1+100), sizeof(int))) ||
+         !(ctx->kernel        = (double *)calloc(ctx->fwKernel*ctx->fwKernel, sizeof(double))) ||
+         !(ctx->kernel_coeffs = (double *)calloc(ctx->nCompKer, sizeof(double))) ||
+         !(ctx->kernel_vec    = (double **)calloc(ctx->nCompKer, sizeof(double *))) ||
+         !(ctx->filter_x      = (double *)calloc(ctx->nCompKer*ctx->fwKernel, sizeof(double))) ||
+         !(ctx->filter_y      = (double *)calloc(ctx->nCompKer*ctx->fwKernel, sizeof(double))) ||
+         !(ctx->check_mat     = (double **)calloc(ctx->nC, sizeof(double *))) ||
+         !(ctx->check_vec     = (double *)calloc(ctx->nC, sizeof(double))) ||
+         !(ctx->check_stack   = (double *)calloc(ctx->nStamps, sizeof(double))) ) {
         return 1;
     }
-    for (i = 0; i < nC; i++) 
-        if ( !(check_mat[i] = (double *)calloc(nC, sizeof(double))) ) {
+    for (i = 0; i < ctx->nC; i++)
+        if ( !(ctx->check_mat[i] = (double *)calloc(ctx->nC, sizeof(double))) ) {
             return 1;
         }
 
-    xMin = 0;
-    yMin = 0;
-    xMax = imin(tNx, iNx) - 1;
-    yMax = imin(tNy, iNy) - 1;
+    ctx->xMin = 0;
+    ctx->yMin = 0;
+    ctx->xMax = imin(tNx, iNx) - 1;
+    ctx->yMax = imin(tNy, iNy) - 1;
+    ctx->fitThresh = kerFitThresh;
 
-    fitThresh = kerFitThresh;
+    return 0;
+}
 
-    for (i = 0; i < nR; i++) {
+void hotpants_cleanup(hotpants_context *ctx) {
+    int i;
+    if (ctx->temp)          free(ctx->temp);
+    if (ctx->indx)          free(ctx->indx);
+    if (ctx->kernel)        free(ctx->kernel);
+    if (ctx->kernel_coeffs) free(ctx->kernel_coeffs);
+    if (ctx->kernel_vec)    free(ctx->kernel_vec);
+    if (ctx->filter_x)      free(ctx->filter_x);
+    if (ctx->filter_y)      free(ctx->filter_y);
+    if (ctx->check_vec)     free(ctx->check_vec);
+    if (ctx->check_stack)   free(ctx->check_stack);
+    if (ctx->check_mat) {
+        for (i = 0; i < ctx->nC; i++)
+            if (ctx->check_mat[i]) free(ctx->check_mat[i]);
+        free(ctx->check_mat);
+    }
+}
+
+int hotpants_process_region(hotpants_context *ctx, hotpants_params *p,
+    int i, char **pLocalForceConvolve)
+{
+    const char *dump_dir = getenv("HOTPANTS_DUMP_DIR");
+    int j,k,l,m;
+    // 从 params 提取
+    float *tFullData = p->tFullData; long tNx = p->tNx, tNy = p->tNy;
+    float *iFullData = p->iFullData; long iNx = p->iNx, iNy = p->iNy;
+    float *tNoiseFullData = p->tNoiseFullData, *iNoiseFullData = p->iNoiseFullData;
+    int *tMaskFullData = p->tMaskFullData, *iMaskFullData = p->iMaskFullData;
+    int nR = p->nR; int *rXMins = p->rXMins, *rXMaxs = p->rXMaxs, *rYMins = p->rYMins, *rYMaxs = p->rYMaxs;
+    int hwKernel = p->hwKernel, ngauss = p->ngauss; int *deg_fixe = p->deg_fixe; float *sigma_gauss = p->sigma_gauss;
+    int kerOrder = p->kerOrder, bgOrder = p->bgOrder;
+    int findSSC = p->findSSC;
+    int hwKSStamp = p->hwKSStamp, nKSStamps = p->nKSStamps;
+    float kerFitThresh = p->kerFitThresh, scaleFitThresh = p->scaleFitThresh, minFracGoodStamps = p->minFracGoodStamps;
+    char *forceConvolve = p->forceConvolve;
+    float statSig = p->statSig, kerSigReject = p->kerSigReject, kerFracMask = p->kerFracMask;
+    float tUThresh = p->tUThresh, tLThresh = p->tLThresh;
+    float tGain = p->tGain, tRdnoise = p->tRdnoise, tPedestal = p->tPedestal;
+    float iUThresh = p->iUThresh, iLThresh = p->iLThresh;
+    float iGain = p->iGain, iRdnoise = p->iRdnoise, iPedestal = p->iPedestal;
+    float tUKThresh = p->tUKThresh, iUKThresh = p->iUKThresh;
+    float kfSpreadMask1 = p->kfSpreadMask1, kfSpreadMask2 = p->kfSpreadMask2;
+    float fillVal = p->fillVal, fillValNoise = p->fillValNoise;
+    char *photNormalize = p->photNormalize, *figMerit = p->figMerit;
+    int sameConv = p->sameConv, rescaleOK = p->rescaleOK, convolveVariance = p->convolveVariance;
+    int usePCA = p->usePCA; float **PCA = p->PCA;
+    float *xcmp = p->xcmp, *ycmp = p->ycmp; int Ncmp = p->Ncmp;
+    int verbose = p->verbose;
+    int savexyflag = p->savexyflag;
+    float *diffOut = p->diffOut, *noiseOut = p->noiseOut, *convOut = p->convOut; int *maskOut = p->maskOut;
+    long oNx = p->oNx, oNy = p->oNy;
+    region_stats *stats = p->stats;
+    char *localForceConvolve = *pLocalForceConvolve;
+    // 从 ctx 提取
+    int nCompKer = ctx->nCompKer, nComp = ctx->nComp, nC = ctx->nC;
+    int nCompBG = ctx->nCompBG, nBGVectors = ctx->nBGVectors, nCompTotal = ctx->nCompTotal;
+    int fwKernel = ctx->fwKernel, fwStamp = ctx->fwStamp, fwKSStamp = ctx->fwKSStamp;
+    int sBorder = ctx->sBorder, nStamps = ctx->nStamps;
+    int nStampX = ctx->nStampX, nStampY = ctx->nStampY;
+    int kcStep = ctx->kcStep;
+    int xMin = ctx->xMin, yMin = ctx->yMin, xMax = ctx->xMax, yMax = ctx->yMax;
+    float fitThresh = ctx->fitThresh;
+    int *indx = ctx->indx; float *temp = ctx->temp;
+    double *check_stack = ctx->check_stack, *filter_x = ctx->filter_x, *filter_y = ctx->filter_y;
+    double **kernel_vec = ctx->kernel_vec;
+    double *kernel_coeffs = ctx->kernel_coeffs, *kernel = ctx->kernel;
+    double **check_mat = ctx->check_mat, *check_vec = ctx->check_vec;
+    // region 局部变量
+    float *tRData = NULL, *iRData = NULL, *oRData = NULL, *eRData = NULL;
+    float *temp2 = NULL;
+    int *misRData = NULL, *mtsRData = NULL, *mRData = NULL;
+    double *tKerSol = NULL, *iKerSol = NULL;
+    stamp_struct *ctStamps = NULL, *ciStamps = NULL;
+    double tMerit = 0, iMerit = 0;
+    int rXMin, rYMin, rXMax, rYMax, rXBMin, rYBMin, rXBMax, rYBMax;
+    int xBufLo, xBufHi, yBufLo, yBufHi;
+    int fpixelOutX, fpixelOutY, lpixelOutX, lpixelOutY;
+    int rPixX, rPixY, nS, niS, ntS, convTmpl, nx2norm;
+    int sXMin, sYMin, sXMax, sYMax;
+    int useFullSS = 0;
+    double sumKernel, meansigSubstamps, scatterSubstamps;
+    double meansigSubstampsF, scatterSubstampsF;
+    int NskippedSubstamps;
+    double sum, mean, median, mode, sd, fwhm, lfwhm, diffrat, x2norm;
+    double summ, meanm, medianm, modem, sdm, fwhmm, lfwhmm;
+    double nsum, nmean, nmedian, nmode, nsd, nfwhm, nlfwhm;
+    double nsumm, nmeanm, nmedianm, nmodem, nsdm, nfwhmm, nlfwhmm;
+    float iSFrac, tSFrac;
+    int flag, status = 0;
+    double inv1;
         // if (kernelImIn) {
         //     readKernel(kernelImIn, i, &tKerSol, &iKerSol, &rXMin, &rXMax, &rYMin, &rYMax,
         //                &meansigSubstamps, &scatterSubstamps,
@@ -1293,21 +1291,159 @@ region_cleanup:
             iKerSol = NULL;
             if (tKerSol) { free(tKerSol); tKerSol = NULL; }
         }
+
+    *pLocalForceConvolve = localForceConvolve;
+    return 0;
+}
+
+int hotpants_compute(
+    float *tFullData, long tNx, long tNy,
+    float *iFullData, long iNx, long iNy,
+    float *tNoiseFullData,
+    float *iNoiseFullData,
+    int *tMaskFullData,
+    int *iMaskFullData,
+    int nR, int *rXMins, int *rXMaxs, int *rYMins, int *rYMaxs,
+    int hwKernel, int ngauss, int *deg_fixe, float *sigma_gauss,
+    int kerOrder, int bgOrder,
+    int nStampX, int nStampY, int nKSStamps, int hwKSStamp,
+    int useFullSS, int findSSC,
+    float kerFitThresh, float scaleFitThresh, float minFracGoodStamps,
+    float statSig, float kerSigReject, float kerFracMask,
+    float tUThresh, float tLThresh, float tGain, float tRdnoise, float tPedestal,
+    float iUThresh, float iLThresh, float iGain, float iRdnoise, float iPedestal,
+    float tUKThresh, float iUKThresh,
+    float kfSpreadMask1, float kfSpreadMask2,
+    float fillVal, float fillValNoise,
+    char *forceConvolve, char *photNormalize, char *figMerit,
+    int sameConv, int rescaleOK, int convolveVariance,
+    int usePCA, float **PCA,
+    float *xcmp, float *ycmp, int Ncmp,
+    int verbose, int kcStep,
+    int savexyflag,
+    float *diffOut, float *noiseOut, float *convOut, int *maskOut,
+    long oNx, long oNy,
+    region_stats *stats
+) {
+    const char *dump_dir = getenv("HOTPANTS_DUMP_DIR");
+    int         i,j,k,l,m;
+    double      sumKernel;
+    double      meansigSubstamps,scatterSubstamps;
+    double      meansigSubstampsF,scatterSubstampsF;
+    // double      meanksumSubstamps,scatterksumSubstamps;
+    int         NskippedSubstamps;
+
+    float *tRData = NULL;
+    double tMerit=0;
+    double *tKerSol = NULL;
+    stamp_struct *ctStamps = NULL;
+
+    float *iRData = NULL;
+    double iMerit=0;
+    double *iKerSol = NULL;
+    stamp_struct *ciStamps = NULL;
+
+    float *oRData = NULL;
+    float *eRData = NULL;
+
+    int      *misRData = NULL;
+    int      *mtsRData = NULL;
+
+    int xMin, yMin, xMax, yMax;
+
+    int rXMin, rYMin, rXMax, rYMax;
+    int rXBMin, rYBMin, rXBMax, rYBMax;
+    int xBufLo, xBufHi, yBufLo, yBufHi;
+
+    int sXMin, sYMin, sXMax, sYMax;
+    int niS, ntS;
+
+    int convTmpl;
+
+    int fpixelOutX, fpixelOutY, lpixelOutX, lpixelOutY;
+    // int anynul;
+    int status = 0;
+    // int kInfoNum;
+    int nx2norm;
+
+    double sum,  mean,  median,  mode,  sd,  fwhm,  lfwhm, diffrat, x2norm;
+    double summ, meanm, medianm, modem, sdm, fwhmm, lfwhmm;
+    double nsum,  nmean,  nmedian,  nmode,  nsd,  nfwhm, nlfwhm;
+    double nsumm, nmeanm, nmedianm, nmodem, nsdm, nfwhmm, nlfwhmm;
+
+    float iSFrac, tSFrac;
+    float fitThresh;
+    int flag;
+    double inv1;
+    int sBorder;
+
+    int rPixX, rPixY;
+    int nStamps, nS, nCompKer, nC;
+    int nComp, nCompBG, nBGVectors, nCompTotal;
+    int fwKernel, fwStamp, fwKSStamp;
+    int *indx = NULL;
+    float *temp = NULL, *temp2 = NULL;
+    double *check_stack = NULL, *filter_x = NULL, *filter_y = NULL;
+    double **kernel_vec = NULL;
+    double *kernel_coeffs = NULL, *kernel = NULL;
+    double **check_mat = NULL, *check_vec = NULL;
+    int *mRData = NULL;
+    char *localForceConvolve = forceConvolve;
+    hotpants_context ctx = {0};
+
+    if (hotpants_init(&ctx, hwKernel, ngauss, deg_fixe, sigma_gauss,
+                      kerOrder, bgOrder, nStampX, nStampY, nKSStamps, hwKSStamp,
+                      useFullSS, kerFitThresh, kcStep, tNx, tNy, iNx, iNy, nR))
+        return 1;
+    nCompKer = ctx.nCompKer; nComp = ctx.nComp; nC = ctx.nC;
+    nCompBG = ctx.nCompBG; nBGVectors = ctx.nBGVectors; nCompTotal = ctx.nCompTotal;
+    fwKernel = ctx.fwKernel; fwStamp = ctx.fwStamp; fwKSStamp = ctx.fwKSStamp;
+    sBorder = ctx.sBorder; nStamps = ctx.nStamps;
+    nStampX = ctx.nStampX; nStampY = ctx.nStampY; kcStep = ctx.kcStep;
+    xMin = ctx.xMin; yMin = ctx.yMin; xMax = ctx.xMax; yMax = ctx.yMax;
+    fitThresh = ctx.fitThresh;
+    indx = ctx.indx; temp = ctx.temp;
+    check_stack = ctx.check_stack; filter_x = ctx.filter_x; filter_y = ctx.filter_y;
+    kernel_vec = ctx.kernel_vec; kernel_coeffs = ctx.kernel_coeffs; kernel = ctx.kernel;
+    check_mat = ctx.check_mat; check_vec = ctx.check_vec;
+
+    hotpants_params prm;
+    prm.tFullData = tFullData; prm.tNx = tNx; prm.tNy = tNy;
+    prm.iFullData = iFullData; prm.iNx = iNx; prm.iNy = iNy;
+    prm.tNoiseFullData = tNoiseFullData; prm.iNoiseFullData = iNoiseFullData;
+    prm.tMaskFullData = tMaskFullData; prm.iMaskFullData = iMaskFullData;
+    prm.nR = nR; prm.rXMins = rXMins; prm.rXMaxs = rXMaxs; prm.rYMins = rYMins; prm.rYMaxs = rYMaxs;
+    prm.hwKernel = hwKernel; prm.ngauss = ngauss; prm.deg_fixe = deg_fixe; prm.sigma_gauss = sigma_gauss;
+    prm.kerOrder = kerOrder; prm.bgOrder = bgOrder;
+    prm.findSSC = findSSC;
+    prm.hwKSStamp = hwKSStamp; prm.nKSStamps = nKSStamps;
+    prm.kerFitThresh = kerFitThresh;
+    prm.forceConvolve = forceConvolve;
+    prm.scaleFitThresh = scaleFitThresh; prm.minFracGoodStamps = minFracGoodStamps;
+    prm.statSig = statSig; prm.kerSigReject = kerSigReject; prm.kerFracMask = kerFracMask;
+    prm.tUThresh = tUThresh; prm.tLThresh = tLThresh;
+    prm.tGain = tGain; prm.tRdnoise = tRdnoise; prm.tPedestal = tPedestal;
+    prm.iUThresh = iUThresh; prm.iLThresh = iLThresh;
+    prm.iGain = iGain; prm.iRdnoise = iRdnoise; prm.iPedestal = iPedestal;
+    prm.tUKThresh = tUKThresh; prm.iUKThresh = iUKThresh;
+    prm.kfSpreadMask1 = kfSpreadMask1; prm.kfSpreadMask2 = kfSpreadMask2;
+    prm.fillVal = fillVal; prm.fillValNoise = fillValNoise;
+    prm.photNormalize = photNormalize; prm.figMerit = figMerit;
+    prm.sameConv = sameConv; prm.rescaleOK = rescaleOK; prm.convolveVariance = convolveVariance;
+    prm.usePCA = usePCA; prm.PCA = PCA;
+    prm.xcmp = xcmp; prm.ycmp = ycmp; prm.Ncmp = Ncmp;
+    prm.verbose = verbose;
+    prm.savexyflag = savexyflag;
+    prm.diffOut = diffOut; prm.noiseOut = noiseOut; prm.convOut = convOut; prm.maskOut = maskOut;
+    prm.oNx = oNx; prm.oNy = oNy;
+    prm.stats = stats;
+
+    for (i = 0; i < nR; i++) {
+        hotpants_process_region(&ctx, &prm, i, &localForceConvolve);
     }
 
-    if (temp)          free(temp);
-    if (indx)          free(indx);
-    if (kernel)        free(kernel);
-    if (kernel_coeffs) free(kernel_coeffs);
-    if (kernel_vec)    free(kernel_vec);
-    if (filter_x)      free(filter_x);
-    if (filter_y)      free(filter_y);
-    if (check_vec)     free(check_vec);
-    if (check_stack)   free(check_stack);
 
-    for (i = 0; i < nC; i++)
-        if (check_mat[i]) free(check_mat[i]);
-    if (check_mat)       free(check_mat);
+    hotpants_cleanup(&ctx);
 
     return 0;
 }
