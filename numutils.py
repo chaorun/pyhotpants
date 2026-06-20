@@ -1382,6 +1382,142 @@ def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
     return (sig1, sig2, sig3)
 
 
+def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
+                                hwKernel, fwKernel, kernel, kernel_coeffs,
+                                convolveVariance, kerFracMask, mRData,
+                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+    from scipy.signal import fftconvolve
+    from scipy.ndimage import maximum_filter
+    import sys
+    import time
+
+    t0 = time.time()
+
+    dovar = variance is not None
+    vData = None
+    if dovar:
+        vData = np.zeros(xSize * ySize, dtype=np.float32)
+
+    fwSq = fwKernel * fwKernel
+    image_2d = np.asarray(image, dtype=np.float64).reshape(ySize, xSize)
+
+    basis_list = []
+    conv_maps = []
+    for idx in range(nCompKer):
+        basis = np.asarray(kernel_vec[idx][:fwSq], dtype=np.float64).reshape(fwKernel, fwKernel)
+        basis_list.append(basis)
+        conv_maps.append(fftconvolve(image_2d, basis, mode='same'))
+
+    t1 = time.time()
+    sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
+
+    halfX = 0.5 * rPixX
+    halfY = 0.5 * rPixY
+    xf1d = (np.arange(xSize, dtype=np.float64) + hwKernel - halfX) / halfX
+    yf1d = (np.arange(ySize, dtype=np.float64) + hwKernel - halfY) / halfY
+
+    xfPow = [np.ones(xSize, dtype=np.float64)]
+    for p in range(1, kerOrder + 1):
+        xfPow.append(xfPow[-1] * xf1d)
+
+    yfPow = [np.ones(ySize, dtype=np.float64)]
+    for p in range(1, kerOrder + 1):
+        yfPow.append(yfPow[-1] * yf1d)
+
+    output = float(kernelSol[1]) * conv_maps[0]
+    coeffFields = [np.full((ySize, xSize), float(kernelSol[1]), dtype=np.float64)]
+
+    k = 2
+    for i1 in range(1, nCompKer):
+        cf = np.zeros((ySize, xSize), dtype=np.float64)
+        for ix in range(kerOrder + 1):
+            for iy in range(kerOrder - ix + 1):
+                cf += float(kernelSol[k]) * np.outer(yfPow[iy], xfPow[ix])
+                k += 1
+        coeffFields.append(cf)
+        output += cf * conv_maps[i1]
+
+    t2 = time.time()
+    sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
+
+    sy = slice(hwKernel, ySize - hwKernel)
+    sx = slice(hwKernel, xSize - hwKernel)
+    cRdata2d = np.asarray(cRdata).reshape(ySize, xSize)
+    cRdata2d[sy, sx] = output[sy, sx]
+
+    if dovar:
+        vData2d = vData.reshape(ySize, xSize)
+        var2d = np.asarray(variance, dtype=np.float64).reshape(ySize, xSize)
+
+        if convolveVariance:
+            varConvMaps = [fftconvolve(var2d, basis_list[idx], mode='same')
+                           for idx in range(nCompKer)]
+            varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+            for i1 in range(nCompKer):
+                varOutput += coeffFields[i1] * varConvMaps[i1]
+        else:
+            varCross = {}
+            for i in range(nCompKer):
+                for j in range(i, nCompKer):
+                    prod = basis_list[i] * basis_list[j]
+                    varCross[(i, j)] = fftconvolve(var2d, prod, mode='same')
+
+            varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+            for i in range(nCompKer):
+                for j in range(i, nCompKer):
+                    factor = 2.0 if i != j else 1.0
+                    varOutput += factor * coeffFields[i] * coeffFields[j] * varCross[(i, j)]
+
+        vData2d[sy, sx] = varOutput[sy, sx]
+
+    t3 = time.time()
+    sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
+
+    cMaskView = np.asarray(cMask).reshape(ySize, xSize)
+    mRDataView = np.asarray(mRData).reshape(ySize, xSize)
+
+    innerCMask = cMaskView[sy, sx]
+    mRDataView[sy, sx] |= innerCMask
+    badSelf = (innerCMask.astype(np.int32) & FLAG_INPUT_ISBAD) > 0
+    mRDataView[sy, sx] |= (FLAG_OUTPUT_ISBAD * badSelf.astype(np.int32))
+
+    mbitField = maximum_filter(cMaskView.astype(np.int32), size=fwKernel)
+    maskPixY, maskPixX = np.where(mbitField[sy, sx] > 0)
+    maskPixY += hwKernel
+    maskPixX += hwKernel
+    nMaskPix = len(maskPixY)
+
+    sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
+
+    for pidx in range(nMaskPix):
+        j = int(maskPixY[pidx])
+        i = int(maskPixX[pidx])
+        make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+                          nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        aks = 0.0
+        uks = 0.0
+        for jc in range(j - hwKernel, j + hwKernel + 1):
+            jk = j - jc + hwKernel
+            for ic in range(i - hwKernel, i + hwKernel + 1):
+                ik = i - ic + hwKernel
+                nc = ic + xSize * jc
+                kk = abs(float(kernel[ik + jk * fwKernel]))
+                aks += kk
+                if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
+                    uks += kk
+        ni = i + xSize * j
+        if aks > 0.0 and (uks / aks) < kerFracMask:
+            mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
+        else:
+            mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
+
+    t4 = time.time()
+    sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
+    sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
+
+    return vData
+
+
 def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
                            hwKernel, fwKernel, kernel, kernel_coeffs,
                            convolveVariance, kerFracMask, mRData,
@@ -1452,6 +1588,122 @@ def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMa
                             mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
                         else:
                             mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
+
+    return vData
+    # return spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
+    #                                    hwKernel, fwKernel, kernel, kernel_coeffs,
+    #                                    convolveVariance, kerFracMask, mRData,
+    #                                    rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+
+
+def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
+                                hwKernel, fwKernel, kernel, kernel_coeffs,
+                                convolveVariance, kerFracMask, mRData,
+                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+    from scipy.signal import fftconvolve
+    from scipy.ndimage import maximum_filter
+
+    dovar = variance is not None
+    vData = None
+    if dovar:
+        vData = np.zeros(xSize * ySize, dtype=np.float32)
+
+    fwSq = fwKernel * fwKernel
+    image2d = np.asarray(image, dtype=np.float64).reshape(ySize, xSize)
+
+    basisList = []
+    convMaps = []
+    for idx in range(nCompKer):
+        basis = np.asarray(kernel_vec[idx][:fwSq], dtype=np.float64).reshape(fwKernel, fwKernel)
+        basisList.append(basis)
+        convMaps.append(fftconvolve(image2d, basis, mode='same'))
+
+    halfX = 0.5 * rPixX
+    halfY = 0.5 * rPixY
+    blockIdxX = np.clip((np.arange(xSize) - hwKernel) // kcStep, 0, None)
+    i0Arr = blockIdxX * kcStep + hwKernel
+    xf1d = (i0Arr.astype(np.float64) + hwKernel - halfX) / halfX
+    blockIdxY = np.clip((np.arange(ySize) - hwKernel) // kcStep, 0, None)
+    j0Arr = blockIdxY * kcStep + hwKernel
+    yf1d = (j0Arr.astype(np.float64) + hwKernel - halfY) / halfY
+
+    xfPow = [np.ones(xSize, dtype=np.float64)]
+    for p in range(1, kerOrder + 1):
+        xfPow.append(xfPow[-1] * xf1d)
+    yfPow = [np.ones(ySize, dtype=np.float64)]
+    for p in range(1, kerOrder + 1):
+        yfPow.append(yfPow[-1] * yf1d)
+
+    output = float(kernelSol[1]) * convMaps[0]
+    coeffFields = [np.full((ySize, xSize), float(kernelSol[1]), dtype=np.float64)]
+
+    k = 2
+    for i1 in range(1, nCompKer):
+        cf = np.zeros((ySize, xSize), dtype=np.float64)
+        for ix in range(kerOrder + 1):
+            for iy in range(kerOrder - ix + 1):
+                cf += float(kernelSol[k]) * np.outer(yfPow[iy], xfPow[ix])
+                k += 1
+        coeffFields.append(cf)
+        output += cf * convMaps[i1]
+
+    sy = slice(hwKernel, ySize - hwKernel)
+    sx = slice(hwKernel, xSize - hwKernel)
+    cRdata2d = np.asarray(cRdata).reshape(ySize, xSize)
+    cRdata2d[sy, sx] = output[sy, sx]
+
+    if dovar:
+        vData2d = vData.reshape(ySize, xSize)
+        var2d = np.asarray(variance, dtype=np.float64).reshape(ySize, xSize)
+        if convolveVariance:
+            varConvMaps = [fftconvolve(var2d, b, mode='same') for b in basisList]
+            varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+            for i1 in range(nCompKer):
+                varOutput += coeffFields[i1] * varConvMaps[i1]
+        else:
+            varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+            for i1 in range(nCompKer):
+                for j1 in range(i1, nCompKer):
+                    prod = basisList[i1] * basisList[j1]
+                    cross = fftconvolve(var2d, prod, mode='same')
+                    factor = 2.0 if i1 != j1 else 1.0
+                    varOutput += factor * coeffFields[i1] * coeffFields[j1] * cross
+        vData2d[sy, sx] = varOutput[sy, sx]
+
+    cMaskView = np.asarray(cMask).reshape(ySize, xSize)
+    mRDataView = np.asarray(mRData).reshape(ySize, xSize)
+
+    innerCMask = cMaskView[sy, sx]
+    mRDataView[sy, sx] |= innerCMask
+    badSelf = (innerCMask.astype(np.int32) & FLAG_INPUT_ISBAD) > 0
+    mRDataView[sy, sx] |= (FLAG_OUTPUT_ISBAD * badSelf.astype(np.int32))
+
+    mbitField = maximum_filter(cMaskView.astype(np.int32), size=fwKernel)
+    maskPixY, maskPixX = np.where(mbitField[sy, sx] > 0)
+    maskPixY += hwKernel
+    maskPixX += hwKernel
+
+    for pidx in range(len(maskPixY)):
+        j = int(maskPixY[pidx])
+        i = int(maskPixX[pidx])
+        make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+                          nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        aks = 0.0
+        uks = 0.0
+        for jc in range(j - hwKernel, j + hwKernel + 1):
+            jk = j - jc + hwKernel
+            for ic in range(i - hwKernel, i + hwKernel + 1):
+                ik = i - ic + hwKernel
+                nc = ic + xSize * jc
+                kk = abs(float(kernel[ik + jk * fwKernel]))
+                aks += kk
+                if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
+                    uks += kk
+        ni = i + xSize * j
+        if aks > 0.0 and (uks / aks) < kerFracMask:
+            mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
+        else:
+            mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
 
     return vData
 
@@ -2169,11 +2421,21 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
             eRData1d = make_noise_image4_numpy(tRData1d, 1.0 / tGain, tRdnoise / tGain, rPixX, rPixY)
 
         sys.stderr.write("\n Convolving...\n")
-        vData = spatial_convolve_numpy(
+        # vData = spatial_convolve_numpy(
+        #     tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
+        #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
+        #     convolveVariance, kerFracMask, mRData1d,
+        #     rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+        vData = spatial_convolve_fast_numpy(
             tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
             kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
             convolveVariance, kerFracMask, mRData1d,
             rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+        # vData = spatial_convolve_fast_numpy(  # 回滚：1K 测试精度不合格
+        #     tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
+        #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
+        #     convolveVariance, kerFracMask, mRData1d,
+        #     rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
         if vData is not None:
             eRData1d = vData
 
@@ -2263,11 +2525,21 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
             eRData1d = make_noise_image4_numpy(iRData1d, 1.0 / iGain, iRdnoise / iGain, rPixX, rPixY)
 
         sys.stderr.write("\n Convolving...\n")
-        vData = spatial_convolve_numpy(
+        # vData = spatial_convolve_numpy(
+        #     iRData1d, eRData1d, rPixX, rPixY, iKerSol, oRData1d, misRData1d,
+        #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
+        #     convolveVariance, kerFracMask, mRData1d,
+        #     rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+        vData = spatial_convolve_fast_numpy(
             iRData1d, eRData1d, rPixX, rPixY, iKerSol, oRData1d, misRData1d,
             kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
             convolveVariance, kerFracMask, mRData1d,
             rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+        # vData = spatial_convolve_fast_numpy(  # 回滚：1K 测试精度不合格
+        #     iRData1d, eRData1d, rPixX, rPixY, iKerSol, oRData1d, misRData1d,
+        #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
+        #     convolveVariance, kerFracMask, mRData1d,
+        #     rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
         if vData is not None:
             eRData1d = vData
 
