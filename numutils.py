@@ -96,6 +96,35 @@ class StampsArray:
         sa.ntS          = nSub
         return sa
 
+    def deepCopy(self):
+        """返回完整深拷贝"""
+        cp = StampsArray(self.nS, self.nKSStamps, self.fwKSStamp, self.nCompKer, self.nBGVectors, self.nC)
+        cp.sscnt[:] = self.sscnt
+        cp.nss[:] = self.nss
+        cp.x0[:] = self.x0
+        cp.y0[:] = self.y0
+        cp.x[:] = self.x
+        cp.y[:] = self.y
+        cp.xss[:] = self.xss
+        cp.yss[:] = self.yss
+        cp.vectors[:] = self.vectors
+        cp.mat[:] = self.mat
+        cp.scprod[:] = self.scprod
+        cp.krefArea[:] = self.krefArea
+        cp.chi2[:] = self.chi2
+        cp.norm[:] = self.norm
+        cp.diff[:] = self.diff
+        cp.sum_val[:] = self.sum_val
+        cp.mean_val[:] = self.mean_val
+        cp.median[:] = self.median
+        cp.mode[:] = self.mode
+        cp.sd[:] = self.sd
+        cp.fwhm[:] = self.fwhm
+        cp.lfwhm[:] = self.lfwhm
+        cp.valid[:] = self.valid
+        cp.ntS = self.ntS
+        return cp
+
 
 def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
     """返回 (mean, stdev, return_code) — 矢量化版本"""
@@ -1164,6 +1193,22 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                     ciSa.xss[niS, nss] = xmax
                     ciSa.yss[niS, nss] = ymax
                     ciSa.nss[niS] += 1
+
+
+def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
+                      getCenters, rXBMin, rYBMin, ciSa, ctSa,
+                      iRData1d, tRData1d, hardX, hardY,
+                      verbose, forceConvolve, rPixX, rPixY,
+                      tUKThresh, iUKThresh, hwKSStamp,
+                      fwStamp, nKSStamps, kerFitThresh,
+                      mRData1d, statSig):
+    return build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
+                               getCenters, rXBMin, rYBMin, ciSa, ctSa,
+                               iRData1d, tRData1d, hardX, hardY,
+                               verbose, forceConvolve, rPixX, rPixY,
+                               tUKThresh, iUKThresh, hwKSStamp,
+                               fwStamp, nKSStamps, kerFitThresh,
+                               mRData1d, statSig)
 
 
 def get_background_numpy(xi, yi, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY):
@@ -3989,9 +4034,40 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                     for m in range(Ncmp):
                         if (xcmp[m] > sXMin + hwKernel + 1) and (xcmp[m] < sXMax - hwKernel - 1) and \
                            (ycmp[m] > sYMin + hwKernel + 1) and (ycmp[m] < sYMax - hwKernel - 1):
-                            build_stamps_numpy(
+                            # # 对比：深拷贝两份输入
+                            # ctCopy = ctSa.deepCopy() if ctSa is not None else None
+                            # ciCopy = ciSa.deepCopy() if ciSa is not None else None
+                            # iDataCopy = iRData1d.copy()
+                            # tDataCopy = tRData1d.copy()
+                            # mDataCopy = mRData1d.copy()
+                            # # 旧版
+                            # build_stamps_numpy(
+                            #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                            #     rXBMin, rYBMin, ciSa, ctSa,
+                            #     iRData1d, tRData1d,
+                            #     xcmp[m] - rXBMin, ycmp[m] - rYBMin,
+                            #     verbose, localForceConvolve, rPixX, rPixY,
+                            #     tUKThresh, iUKThresh, hwKSStamp,
+                            #     fwStamp, nKSStamps, kerFitThresh,
+                            #     mRData1d, statSig)
+                            # bsNssOldT = int(ctSa.nss[ntS]) if ctSa is not None else -1
+                            # bsNssOldI = int(ciSa.nss[niS]) if ciSa is not None else -1
+                            # bsXssOldT = ctSa.xss[ntS].copy() if ctSa is not None else None
+                            # bsYssOldT = ctSa.yss[ntS].copy() if ctSa is not None else None
+                            # bsXssOldI = ciSa.xss[niS].copy() if ciSa is not None else None
+                            # bsYssOldI = ciSa.yss[niS].copy() if ciSa is not None else None
+                            # # 新版（用副本）
+                            # buildStampsNumba(
+                            #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                            #     rXBMin, rYBMin, ciCopy, ctCopy,
+                            #     iDataCopy, tDataCopy,
+                            #     xcmp[m] - rXBMin, ycmp[m] - rYBMin,
+                            #     verbose, localForceConvolve, rPixX, rPixY,
+                            #     tUKThresh, iUKThresh, hwKSStamp,
+                            #     fwStamp, nKSStamps, kerFitThresh,
+                            #     mDataCopy, statSig)
+                            buildStampsNumba(
                                 sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
-                                # rXBMin, rYBMin, ciStamps, ctStamps,
                                 rXBMin, rYBMin, ciSa, ctSa,
                                 iRData1d, tRData1d,
                                 xcmp[m] - rXBMin, ycmp[m] - rYBMin,
@@ -3999,39 +4075,221 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                                 tUKThresh, iUKThresh, hwKSStamp,
                                 fwStamp, nKSStamps, kerFitThresh,
                                 mRData1d, statSig)
+                            # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
+                            # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
+                            # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
+                            # bsYssNewT = ctCopy.yss[ntS] if ctCopy is not None else None
+                            # bsXssNewI = ciCopy.xss[niS] if ciCopy is not None else None
+                            # bsYssNewI = ciCopy.yss[niS] if ciCopy is not None else None
+                            # # 对比
+                            # bsNssDiff = abs(bsNssOldT - bsNssNewT) + abs(bsNssOldI - bsNssNewI)
+                            # bsXssMax = 0
+                            # bsYssMax = 0
+                            # if bsXssOldT is not None and bsXssNewT is not None:
+                            #     bsXssMax = int(np.max(np.abs(bsXssOldT.astype(np.int64) - bsXssNewT.astype(np.int64))))
+                            #     bsYssMax = int(np.max(np.abs(bsYssOldT.astype(np.int64) - bsYssNewT.astype(np.int64))))
+                            # if bsXssOldI is not None and bsXssNewI is not None:
+                            #     bsXssMax = max(bsXssMax, int(np.max(np.abs(bsXssOldI.astype(np.int64) - bsXssNewI.astype(np.int64)))))
+                            #     bsYssMax = max(bsYssMax, int(np.max(np.abs(bsYssOldI.astype(np.int64) - bsYssNewI.astype(np.int64)))))
+                            # sys.stderr.write('[BS_CMP] nss:T=%d=%d I=%d=%d' % (
+                            #     bsNssOldT, bsNssNewT, bsNssOldI, bsNssNewI))
+                            # bsXssOd = 0; bsYssOd = 0; bsXssNd = 0; bsYssNd = 0
+                            # if bsXssOldT is not None and bsXssNewT is not None:
+                            #     bsXssOd = int(np.max(bsXssOldT)); bsXssNd = int(np.max(bsXssNewT))
+                            #     bsYssOd = int(np.max(bsYssOldT)); bsYssNd = int(np.max(bsYssNewT))
+                            # sys.stderr.write(' xss:T=%d=%d I=%d=%d' % (bsXssOd, bsXssNd,
+                            #     int(np.max(bsXssOldI) if bsXssOldI is not None else -1) if bsXssOldI is not None else -1,
+                            #     int(np.max(bsXssNewI) if bsXssNewI is not None else -1) if bsXssNewI is not None else -1))
+                            # if ctCopy is not None and ctSa is not None and ctSa.nss[ntS] > 0:
+                            #     sys.stderr.write(' vec:Tmax=%.3e=%.3e mat:Tmax=%.3e=%.3e' % (
+                            #         float(np.max(np.abs(ctSa.vectors[ntS].astype(np.float64)))),
+                            #         float(np.max(np.abs(ctCopy.vectors[ntS].astype(np.float64)))),
+                            #         float(np.max(np.abs(ctSa.mat[ntS].astype(np.float64)))),
+                            #         float(np.max(np.abs(ctCopy.mat[ntS].astype(np.float64))))))
+                            # sys.stderr.write('\n')
                     if findSSC:
                         if verbose >= 2:
                             sys.stderr.write("Automatically finding additional centers\n")
-                        build_stamps_numpy(
+                        # ctCopy = ctSa.deepCopy() if ctSa is not None else None
+                        # ciCopy = ciSa.deepCopy() if ciSa is not None else None
+                        # iDataCopy = iRData1d.copy()
+                        # tDataCopy = tRData1d.copy()
+                        # mDataCopy = mRData1d.copy()
+                        # build_stamps_numpy(
+                        #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
+                        #     rXBMin, rYBMin, ciSa, ctSa,
+                        #     iRData1d, tRData1d, 0, 0,
+                        #     verbose, localForceConvolve, rPixX, rPixY,
+                        #     tUKThresh, iUKThresh, hwKSStamp,
+                        #     fwStamp, nKSStamps, kerFitThresh,
+                        #     mRData1d, statSig)
+                        # bsNssOldT = int(ctSa.nss[ntS]) if ctSa is not None else -1
+                        # bsNssOldI = int(ciSa.nss[niS]) if ciSa is not None else -1
+                        # bsXssOldT = ctSa.xss[ntS].copy() if ctSa is not None else None
+                        # bsYssOldT = ctSa.yss[ntS].copy() if ctSa is not None else None
+                        # bsXssOldI = ciSa.xss[niS].copy() if ciSa is not None else None
+                        # bsYssOldI = ciSa.yss[niS].copy() if ciSa is not None else None
+                        # buildStampsNumba(
+                        #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
+                        #     rXBMin, rYBMin, ciCopy, ctCopy,
+                        #     iDataCopy, tDataCopy, 0, 0,
+                        #     verbose, localForceConvolve, rPixX, rPixY,
+                        #     tUKThresh, iUKThresh, hwKSStamp,
+                        #     fwStamp, nKSStamps, kerFitThresh,
+                        #     mDataCopy, statSig)
+                        buildStampsNumba(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
-                            # rXBMin, rYBMin, ciStamps, ctStamps,
                             rXBMin, rYBMin, ciSa, ctSa,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
                             fwStamp, nKSStamps, kerFitThresh,
                             mRData1d, statSig)
+                        # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
+                        # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
+                        # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
+                        # bsYssNewT = ctCopy.yss[ntS] if ctCopy is not None else None
+                        # bsXssNewI = ciCopy.xss[niS] if ciCopy is not None else None
+                        # bsYssNewI = ciCopy.yss[niS] if ciCopy is not None else None
+                        # bsNssDiff = abs(bsNssOldT - bsNssNewT) + abs(bsNssOldI - bsNssNewI)
+                        # bsXssMax = 0
+                        # bsYssMax = 0
+                        # if bsXssOldT is not None and bsXssNewT is not None:
+                        #     bsXssMax = int(np.max(np.abs(bsXssOldT.astype(np.int64) - bsXssNewT.astype(np.int64))))
+                        #     bsYssMax = int(np.max(np.abs(bsYssOldT.astype(np.int64) - bsYssNewT.astype(np.int64))))
+                        # if bsXssOldI is not None and bsXssNewI is not None:
+                        #     bsXssMax = max(bsXssMax, int(np.max(np.abs(bsXssOldI.astype(np.int64) - bsXssNewI.astype(np.int64)))))
+                        #     bsYssMax = max(bsYssMax, int(np.max(np.abs(bsYssOldI.astype(np.int64) - bsYssNewI.astype(np.int64)))))
+                        # sys.stderr.write('[BS_CMP] nt=%d=%d' % (bsNssOldT, bsNssNewT))
+                        # if bsXssOldT is not None and bsXssNewT is not None:
+                        #     sys.stderr.write(' xt=%d=%d yt=%d=%d' % (int(np.max(bsXssOldT)), int(np.max(bsXssNewT)), int(np.max(bsYssOldT)), int(np.max(bsYssNewT))))
+                        # if ctSa is not None and ctCopy is not None:
+                        #     sys.stderr.write(' vt=%.3e=%.3e mt=%.3e=%.3e' % (float(np.max(np.abs(ctSa.vectors[ntS]))), float(np.max(np.abs(ctCopy.vectors[ntS]))), float(np.max(np.abs(ctSa.mat[ntS]))), float(np.max(np.abs(ctCopy.mat[ntS])))))
+                        # if bsXssOldI is not None and bsXssNewI is not None:
+                        #     sys.stderr.write(' ni=%d=%d xi=%d=%d' % (bsNssOldI, bsNssNewI, int(np.max(bsXssOldI)), int(np.max(bsXssNewI))))
+                        # sys.stderr.write(' dif:n=%d x=%d y=%d' % (bsNssDiff, bsXssMax, bsYssMax))
+                        # sys.stderr.write('\n')
                 else:
                     if useFullSS:
-                        build_stamps_numpy(
+                        # ctCopy = ctSa.deepCopy() if ctSa is not None else None
+                        # ciCopy = ciSa.deepCopy() if ciSa is not None else None
+                        # iDataCopy = iRData1d.copy()
+                        # tDataCopy = tRData1d.copy()
+                        # mDataCopy = mRData1d.copy()
+                        # build_stamps_numpy(
+                        #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                        #     rXBMin, rYBMin, ciSa, ctSa,
+                        #     iRData1d, tRData1d, 0, 0,
+                        #     verbose, localForceConvolve, rPixX, rPixY,
+                        #     tUKThresh, iUKThresh, hwKSStamp,
+                        #     fwStamp, nKSStamps, kerFitThresh,
+                        #     mRData1d, statSig)
+                        # bsNssOldT = int(ctSa.nss[ntS]) if ctSa is not None else -1
+                        # bsNssOldI = int(ciSa.nss[niS]) if ciSa is not None else -1
+                        # bsXssOldT = ctSa.xss[ntS].copy() if ctSa is not None else None
+                        # bsYssOldT = ctSa.yss[ntS].copy() if ctSa is not None else None
+                        # bsXssOldI = ciSa.xss[niS].copy() if ciSa is not None else None
+                        # bsYssOldI = ciSa.yss[niS].copy() if ciSa is not None else None
+                        # buildStampsNumba(
+                        #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                        #     rXBMin, rYBMin, ciCopy, ctCopy,
+                        #     iDataCopy, tDataCopy, 0, 0,
+                        #     verbose, localForceConvolve, rPixX, rPixY,
+                        #     tUKThresh, iUKThresh, hwKSStamp,
+                        #     fwStamp, nKSStamps, kerFitThresh,
+                        #     mDataCopy, statSig)
+                        buildStampsNumba(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
-                            # rXBMin, rYBMin, ciStamps, ctStamps,
                             rXBMin, rYBMin, ciSa, ctSa,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
                             fwStamp, nKSStamps, kerFitThresh,
                             mRData1d, statSig)
+                        # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
+                        # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
+                        # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
+                        # bsYssNewT = ctCopy.yss[ntS] if ctCopy is not None else None
+                        # bsXssNewI = ciCopy.xss[niS] if ciCopy is not None else None
+                        # bsYssNewI = ciCopy.yss[niS] if ciCopy is not None else None
+                        # bsNssDiff = abs(bsNssOldT - bsNssNewT) + abs(bsNssOldI - bsNssNewI)
+                        # bsXssMax = 0
+                        # bsYssMax = 0
+                        # if bsXssOldT is not None and bsXssNewT is not None:
+                        #     bsXssMax = int(np.max(np.abs(bsXssOldT.astype(np.int64) - ctCopy.xss[ntS].astype(np.int64))))
+                        #     bsYssMax = int(np.max(np.abs(bsYssOldT.astype(np.int64) - ctCopy.yss[ntS].astype(np.int64))))
+                        # if bsXssOldI is not None and bsXssNewI is not None:
+                        #     bsXssMax = max(bsXssMax, int(np.max(np.abs(bsXssOldI.astype(np.int64) - ciCopy.xss[niS].astype(np.int64)))))
+                        #     bsYssMax = max(bsYssMax, int(np.max(np.abs(bsYssOldI.astype(np.int64) - ciCopy.yss[niS].astype(np.int64)))))
+                        # sys.stderr.write('[BS_CMP] nt=%d=%d' % (bsNssOldT, bsNssNewT))
+                        # if bsXssOldT is not None and bsXssNewT is not None:
+                        #     sys.stderr.write(' xt=%d=%d yt=%d=%d' % (int(np.max(bsXssOldT)), int(np.max(bsXssNewT)), int(np.max(bsYssOldT)), int(np.max(bsYssNewT))))
+                        # if ctSa is not None and ctCopy is not None:
+                        #     sys.stderr.write(' vt=%.3e=%.3e mt=%.3e=%.3e' % (float(np.max(np.abs(ctSa.vectors[ntS]))), float(np.max(np.abs(ctCopy.vectors[ntS]))), float(np.max(np.abs(ctSa.mat[ntS]))), float(np.max(np.abs(ctCopy.mat[ntS])))))
+                        # if bsXssOldI is not None and bsXssNewI is not None:
+                        #     sys.stderr.write(' ni=%d=%d xi=%d=%d' % (bsNssOldI, bsNssNewI, int(np.max(bsXssOldI)), int(np.max(bsXssNewI))))
+                        # sys.stderr.write(' dif:n=%d x=%d y=%d' % (bsNssDiff, bsXssMax, bsYssMax))
+                        # sys.stderr.write('\n')
                     else:
-                        build_stamps_numpy(
+                        # ctCopy = ctSa.deepCopy() if ctSa is not None else None
+                        # ciCopy = ciSa.deepCopy() if ciSa is not None else None
+                        # iDataCopy = iRData1d.copy()
+                        # tDataCopy = tRData1d.copy()
+                        # mDataCopy = mRData1d.copy()
+                        # build_stamps_numpy(
+                        #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
+                        #     rXBMin, rYBMin, ciSa, ctSa,
+                        #     iRData1d, tRData1d, 0, 0,
+                        #     verbose, localForceConvolve, rPixX, rPixY,
+                        #     tUKThresh, iUKThresh, hwKSStamp,
+                        #     fwStamp, nKSStamps, kerFitThresh,
+                        #     mRData1d, statSig)
+                        # bsNssOldT = int(ctSa.nss[ntS]) if ctSa is not None else -1
+                        # bsNssOldI = int(ciSa.nss[niS]) if ciSa is not None else -1
+                        # bsXssOldT = ctSa.xss[ntS].copy() if ctSa is not None else None
+                        # bsYssOldT = ctSa.yss[ntS].copy() if ctSa is not None else None
+                        # bsXssOldI = ciSa.xss[niS].copy() if ciSa is not None else None
+                        # bsYssOldI = ciSa.yss[niS].copy() if ciSa is not None else None
+                        # buildStampsNumba(
+                        #     sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
+                        #     rXBMin, rYBMin, ciCopy, ctCopy,
+                        #     iDataCopy, tDataCopy, 0, 0,
+                        #     verbose, localForceConvolve, rPixX, rPixY,
+                        #     tUKThresh, iUKThresh, hwKSStamp,
+                        #     fwStamp, nKSStamps, kerFitThresh,
+                        #     mDataCopy, statSig)
+                        buildStampsNumba(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
-                            # rXBMin, rYBMin, ciStamps, ctStamps,
                             rXBMin, rYBMin, ciSa, ctSa,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
                             fwStamp, nKSStamps, kerFitThresh,
                             mRData1d, statSig)
+                        # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
+                        # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
+                        # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
+                        # bsYssNewT = ctCopy.yss[ntS] if ctCopy is not None else None
+                        # bsXssNewI = ciCopy.xss[niS] if ciCopy is not None else None
+                        # bsYssNewI = ciCopy.yss[niS] if ciCopy is not None else None
+                        # bsNssDiff = abs(bsNssOldT - bsNssNewT) + abs(bsNssOldI - bsNssNewI)
+                        # bsXssMax = 0
+                        # bsYssMax = 0
+                        # if bsXssOldT is not None and bsNssNewT >= 0:
+                        #     bsXssMax = int(np.max(np.abs(bsXssOldT.astype(np.int64) - ctCopy.xss[ntS].astype(np.int64))))
+                        #     bsYssMax = int(np.max(np.abs(bsYssOldT.astype(np.int64) - ctCopy.yss[ntS].astype(np.int64))))
+                        # if bsXssOldI is not None and bsNssNewI >= 0:
+                        #     bsXssMax = max(bsXssMax, int(np.max(np.abs(bsXssOldI.astype(np.int64) - ciCopy.xss[niS].astype(np.int64)))))
+                        #     bsYssMax = max(bsYssMax, int(np.max(np.abs(bsYssOldI.astype(np.int64) - ciCopy.yss[niS].astype(np.int64)))))
+                        # sys.stderr.write('[BS_CMP] nt=%d=%d' % (bsNssOldT, bsNssNewT))
+                        # if bsXssOldT is not None and bsXssNewT is not None:
+                        #     sys.stderr.write(' xt=%d=%d yt=%d=%d' % (int(np.max(bsXssOldT)), int(np.max(bsXssNewT)), int(np.max(bsYssOldT)), int(np.max(bsYssNewT))))
+                        # if ctSa is not None and ctCopy is not None:
+                        #     sys.stderr.write(' vt=%.3e=%.3e mt=%.3e=%.3e' % (float(np.max(np.abs(ctSa.vectors[ntS]))), float(np.max(np.abs(ctCopy.vectors[ntS]))), float(np.max(np.abs(ctSa.mat[ntS]))), float(np.max(np.abs(ctCopy.mat[ntS])))))
+                        # if bsXssOldI is not None and bsXssNewI is not None:
+                        #     sys.stderr.write(' ni=%d=%d xi=%d=%d' % (bsNssOldI, bsNssNewI, int(np.max(bsXssOldI)), int(np.max(bsXssNewI))))
+                        # sys.stderr.write(' dif:n=%d x=%d y=%d' % (bsNssDiff, bsXssMax, bsYssMax))
+                        # sys.stderr.write('\n')
 
                 if localForceConvolve != "i":
                     if verbose >= 2:
