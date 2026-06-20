@@ -2140,13 +2140,20 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
     output = float(kernelSol[1]) * conv_maps[0]
     coeffFields = [np.full((ySize, xSize), float(kernelSol[1]), dtype=np.float64)]
 
+    poly_basis = []
+    for ix in range(kerOrder + 1):
+        for iy in range(kerOrder - ix + 1):
+            poly_basis.append(np.outer(yfPow[iy], xfPow[ix]))
+    num_poly_terms = len(poly_basis)
+
     k = 2
     for i1 in range(1, nCompKer):
         cf = np.zeros((ySize, xSize), dtype=np.float64)
-        for ix in range(kerOrder + 1):
-            for iy in range(kerOrder - ix + 1):
-                cf += float(kernelSol[k]) * np.outer(yfPow[iy], xfPow[ix])
-                k += 1
+        for p in range(num_poly_terms):
+            if k + p >= len(kernelSol):
+                break
+            cf += float(kernelSol[k + p]) * poly_basis[p]
+        k += num_poly_terms
         coeffFields.append(cf)
         output += cf * conv_maps[i1]
 
@@ -3645,53 +3652,47 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     tRData1d = tRData.ravel()
     iRData1d = iRData.ravel()
 
-    for l in range(rPixY):
-        for k in range(hwKernel):
-            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
-        for k in range(rPixX - hwKernel, rPixX):
-            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
-    for l in range(hwKernel):
-        for k in range(hwKernel, rPixX - hwKernel):
-            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
-    for l in range(rPixY - hwKernel, rPixY):
-        for k in range(hwKernel, rPixX - hwKernel):
-            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
+    mRData2d = mRData1d.reshape(rPixY, rPixX)
+    mRData2d[:, :hwKernel] |= FLAG_OUTPUT_ISBAD
+    mRData2d[:, rPixX - hwKernel:rPixX] |= FLAG_OUTPUT_ISBAD
+    mRData2d[:hwKernel, hwKernel:rPixX - hwKernel] |= FLAG_OUTPUT_ISBAD
+    mRData2d[rPixY - hwKernel:, hwKernel:rPixX - hwKernel] |= FLAG_OUTPUT_ISBAD
 
     sys.stderr.write(" Creating and writing output images...\n")
 
     inv1 = 1.0 / sumKernel
 
     if conv_out is not None:
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                if (photNormalize[0:1] != "u") and \
-                   ((convTmpl and photNormalize[0:1] == "t") or
-                    (not convTmpl and photNormalize[0:1] == "i")):
-                    oRData1d[k + rPixX * l] *= inv1
+        inner_sy = slice(hwKernel, rPixY - hwKernel)
+        inner_sx = slice(hwKernel, rPixX - hwKernel)
+        norm_ok = (photNormalize[0:1] != "u") and \
+                  ((convTmpl and photNormalize[0:1] == "t") or
+                   (not convTmpl and photNormalize[0:1] == "i"))
+        if norm_ok:
+            oRData2d = oRData1d.reshape(rPixY, rPixX)
+            oRData2d[inner_sy, inner_sx] *= inv1
 
         insert_subregion_flt_numpy(
             oRData, conv_out, fpixelOutX, fpixelOutY,
             lpixelOutX, lpixelOutY, xBufLo, yBufLo)
 
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                if (photNormalize[0:1] != "u") and \
-                   ((convTmpl and photNormalize[0:1] == "t") or
-                    (not convTmpl and photNormalize[0:1] == "i")):
-                    oRData1d[k + rPixX * l] *= sumKernel
+        if norm_ok:
+            oRData2d[inner_sy, inner_sx] *= sumKernel
 
     meansigSubstampsF = 0.0
     scatterSubstampsF = 0.0
+    inner_sy = slice(hwKernel, rPixY - hwKernel)
+    inner_sx = slice(hwKernel, rPixX - hwKernel)
 
     if convTmpl:
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                m = k + rPixX * l
-                oRData1d[m] -= iRData1d[m]
-                if (photNormalize[0:1] != "u") and (photNormalize[0:1] == "t"):
-                    oRData1d[m] *= inv1
-                    noiseData1d[m] *= inv1
-                oRData1d[m] *= -1.0
+        oRData2d = oRData1d.reshape(rPixY, rPixX)
+        iRData2d = iRData1d.reshape(rPixY, rPixX)
+        oRData2d[inner_sy, inner_sx] -= iRData2d[inner_sy, inner_sx]
+        if (photNormalize[0:1] != "u") and (photNormalize[0:1] == "t"):
+            oRData2d[inner_sy, inner_sx] *= inv1
+            noiseData2d = noiseData1d.reshape(rPixY, rPixX)
+            noiseData2d[inner_sy, inner_sx] *= inv1
+        oRData2d[inner_sy, inner_sx] *= -1.0
 
         if figMerit[0:1] == "v":
             temp2 = np.zeros(nS, dtype=np.float32)
@@ -3709,13 +3710,13 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             sys.stderr.write("   FINAL Mean sig: %6.3f stdev: %6.3f\n" % (meansigSubstampsF, scatterSubstampsF))
 
     else:
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                m = k + rPixX * l
-                oRData1d[m] -= tRData1d[m]
-                if (photNormalize[0:1] != "u") and (photNormalize[0:1] == "i"):
-                    oRData1d[m] *= inv1
-                    noiseData1d[m] *= inv1
+        oRData2d = oRData1d.reshape(rPixY, rPixX)
+        tRData2d = tRData1d.reshape(rPixY, rPixX)
+        oRData2d[inner_sy, inner_sx] -= tRData2d[inner_sy, inner_sx]
+        if (photNormalize[0:1] != "u") and (photNormalize[0:1] == "i"):
+            oRData2d[inner_sy, inner_sx] *= inv1
+            noiseData2d = noiseData1d.reshape(rPixY, rPixX)
+            noiseData2d[inner_sy, inner_sx] *= inv1
 
         if figMerit[0:1] == "v":
             temp2 = np.zeros(nS, dtype=np.float32)
@@ -3793,18 +3794,17 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             diffrat = (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0) / diffrat
         if diffrat > 1:
             sys.stderr.write(" Scale OK pixel noise by = %.2f\n" % diffrat)
-            for idx in range(rPixX * rPixY):
-                if (mRData1d[idx] & 0xff) and not (mRData1d[idx] & FLAG_OUTPUT_ISBAD):
-                    noiseData1d[idx] *= diffrat
+            ok_mask = (mRData1d & 0xff).astype(np.bool_) & ~((mRData1d & FLAG_OUTPUT_ISBAD).astype(np.bool_))
+            noiseData1d[ok_mask] *= diffrat
         else:
             sys.stderr.write(" Leave OK pixel noise as-is\n")
 
     if kfSpreadMask2 >= 0:
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                if mRData1d[k + rPixX * l] & FLAG_OUTPUT_ISBAD:
-                    oRData1d[k + rPixX * l] = fillVal
-                    noiseData1d[k + rPixX * l] = fillValNoise
+        oRData2d = oRData1d.reshape(rPixY, rPixX)
+        noiseData2d = noiseData1d.reshape(rPixY, rPixX)
+        bad_flag = (mRData1d.reshape(rPixY, rPixX)[inner_sy, inner_sx] & FLAG_OUTPUT_ISBAD).astype(np.bool_)
+        oRData2d[inner_sy, inner_sx][bad_flag] = fillVal
+        noiseData2d[inner_sy, inner_sx][bad_flag] = fillValNoise
 
     oRData_2d = oRData1d.reshape(rPixY, rPixX)
     noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
