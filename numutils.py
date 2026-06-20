@@ -1440,6 +1440,46 @@ def xy_conv_stamp_numpy(stamp, image, n, ren, usePCA, fwKSStamp, fwKernel,
             stamp['vectors'][n][i] -= stamp['vectors'][0][i]
 
 
+@numba.jit(nopython=True)
+def xy_conv_stamp_fast_jit(image, filterX, filterY, xi, yi,
+                            fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+                            rPixX, nvecTotal, renFlags,
+                            out_vectors):
+    fwSqStamp = fwKSStamp * fwKSStamp
+    fwSqKernel = fwKernel * fwKernel
+
+    kernels = np.zeros((nvecTotal, fwSqKernel), dtype=np.float64)
+    for n in range(nvecTotal):
+        for jc in range(fwKernel):
+            for ic in range(fwKernel):
+                fy_idx = fwKernel - 1 - jc
+                fx_idx = fwKernel - 1 - ic
+                kernels[n, jc * fwKernel + ic] = filterY[n * fwKernel + fy_idx] * filterX[n * fwKernel + fx_idx]
+
+    for n in range(nvecTotal):
+        for fsi in range(fwSqStamp):
+            out_vectors[n, fsi] = 0.0
+
+    for fsi in range(fwSqStamp):
+        fsi_x = fsi % fwKSStamp
+        fsi_y = fsi // fwKSStamp
+        img_base_x = xi - hwKSStamp + fsi_x - hwKernel
+        img_base_y = yi - hwKSStamp + fsi_y - hwKernel
+        for fki in range(fwSqKernel):
+            kx = fki % fwKernel
+            ky = fki // fwKernel
+            img_x = img_base_x + kx
+            img_y = img_base_y + ky
+            img_val = image[img_x + rPixX * img_y]
+            for n in range(nvecTotal):
+                out_vectors[n, fsi] += kernels[n, fki] * img_val
+
+    for n in range(nvecTotal):
+        if renFlags[n]:
+            for fsi in range(fwSqStamp):
+                out_vectors[n, fsi] -= out_vectors[0, fsi]
+
+
 def xy_conv_stamp_fast_numpy(sa, si, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
                               hwKSStamp, hwKernel, rPixX, filterX, filterY, temp, PCA):
     # def xy_conv_stamp_fast_numpy(stamp, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
@@ -1485,6 +1525,29 @@ def xy_conv_stamp_fast_numpy(sa, si, image, nvecTotal, renFlags, usePCA, fwKSSta
             result[n] -= result[0]
         # stamp['vectors'][n][:fwKSStamp * fwKSStamp] = result[n]
         sa.vectors[si, n, :fwKSStamp * fwKSStamp] = result[n]
+
+
+def xy_conv_stamp_fast_numpy_new(sa, si, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
+                                  hwKSStamp, hwKernel, rPixX, filterX, filterY, temp, PCA):
+    if usePCA:
+        return xy_conv_stamp_fast_numpy(sa, si, image, nvecTotal, renFlags, usePCA,
+                                         fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+                                         rPixX, filterX, filterY, temp, PCA)
+
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    yi = int(sa.yss[si, sa.sscnt[si]])
+    img_flat = np.asarray(image, dtype=np.float64).ravel()
+    fx = np.asarray(filterX, dtype=np.float64)
+    fy = np.asarray(filterY, dtype=np.float64)
+    rflags = np.array(renFlags, dtype=np.int32)
+    out_vec = np.zeros((nvecTotal, fwKSStamp * fwKSStamp), dtype=np.float64)
+
+    xy_conv_stamp_fast_jit(img_flat, fx, fy, xi, yi,
+                            fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+                            rPixX, nvecTotal, rflags, out_vec)
+
+    for n in range(nvecTotal):
+        sa.vectors[si, n, :fwKSStamp * fwKSStamp] = out_vec[n]
 
 
 def xy_conv_stamp_pca_numpy(sa, si, image, n, ren, fwKSStamp, hwKSStamp,
@@ -2095,6 +2158,20 @@ def fill_stamp_numpy(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_f
     xy_conv_stamp_fast_numpy(sa, si, imConv, nvec, renFlags, usePCA,
                               fwKSStamp, fwKernel, hwKSStamp, hwKernel,
                               rPixX, filter_x, filter_y, temp, PCA)
+
+    if not usePCA:
+        old_vecs = sa.vectors[si, :nvec, :fwKSStamp * fwKSStamp].copy()
+        sa_copy = StampsArray(1, 1, fwKSStamp, nvec, 0, 1)
+        sa_copy.xss[0, 0] = sa.xss[si, sa.sscnt[si]]
+        sa_copy.yss[0, 0] = sa.yss[si, sa.sscnt[si]]
+        sa_copy.sscnt[0] = 0
+        xy_conv_stamp_fast_numpy_new(sa_copy, 0, imConv, nvec, renFlags, usePCA,
+                                      fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+                                      rPixX, filter_x, filter_y, temp, PCA)
+        new_vecs = sa_copy.vectors[0, :nvec, :fwKSStamp * fwKSStamp]
+        diff = np.abs(old_vecs - new_vecs)
+        logger.info('[xy_conv compare] max_diff=%.6e mean_diff=%.6e n_nonzero=%d/%d',
+                     diff.max(), diff.mean(), (diff > ZEROVAL).sum(), diff.size)
 
     # if cut_sstamp_numpy(stamp_dict, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
     if cut_sstamp_numpy(sa, si, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
