@@ -2125,6 +2125,72 @@ def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMa
 
 
 @numba.jit(nopython=True)
+def variance_convolve_jit(var_in, var_out, xSize, ySize, hwKernel, fwKernel,
+                           kernelSol, kernel_vec_2d, nCompKer, kerOrder,
+                           kcStep, rPixX, rPixY, convolveVariance):
+    fwSq = fwKernel * fwKernel
+    halfX = np.float64(0.5 * rPixX)
+    halfY = np.float64(0.5 * rPixY)
+
+    prev_i0 = -1
+    prev_j0 = -1
+    kernel = np.zeros(fwSq, dtype=np.float64)
+
+    for j in range(hwKernel, ySize - hwKernel):
+        for i in range(hwKernel, xSize - hwKernel):
+            blockI = (i - hwKernel) // kcStep
+            i0 = blockI * kcStep + hwKernel
+            blockJ = (j - hwKernel) // kcStep
+            j0 = blockJ * kcStep + hwKernel
+
+            if i0 != prev_i0 or j0 != prev_j0:
+                xi = np.float64(i0 + hwKernel)
+                yi = np.float64(j0 + hwKernel)
+                xf = (xi - halfX) / halfX
+                yf = (yi - halfY) / halfY
+
+                for jj in range(fwSq):
+                    kernel[jj] = kernelSol[1] * kernel_vec_2d[0, jj]
+
+                ksol = 2
+                for ig in range(1, nCompKer):
+                    coeff = np.float64(0.0)
+                    ax = np.float64(1.0)
+                    for ix in range(kerOrder + 1):
+                        ay = np.float64(1.0)
+                        for iy in range(kerOrder - ix + 1):
+                            coeff += kernelSol[ksol] * ax * ay
+                            ksol += 1
+                            ay *= yf
+                        ax *= xf
+                    for jj in range(fwSq):
+                        kernel[jj] += coeff * kernel_vec_2d[ig, jj]
+
+                prev_i0 = i0
+                prev_j0 = j0
+
+            var_sum = np.float64(0.0)
+            if convolveVariance:
+                for jc in range(fwKernel):
+                    cy = j - hwKernel + jc
+                    for ic in range(fwKernel):
+                        cx = i - hwKernel + ic
+                        k_idx = (fwKernel - 1 - ic) + (fwKernel - 1 - jc) * fwKernel
+                        kk = kernel[k_idx]
+                        var_sum += kk * kk * var_in[cy, cx]
+            else:
+                for jc in range(fwKernel):
+                    cy = j - hwKernel + jc
+                    for ic in range(fwKernel):
+                        cx = i - hwKernel + ic
+                        k_idx = (fwKernel - 1 - ic) + (fwKernel - 1 - jc) * fwKernel
+                        kk = kernel[k_idx]
+                        var_sum += abs(kk) * var_in[cy, cx]
+
+            var_out[j, i] = var_sum
+
+
+@numba.jit(nopython=True)
 def mask_check_loop_jit(maskPixY, maskPixX, cMask2d, mRData1d,
                          kernelSol, kernel_vec_2d,
                          nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
@@ -2203,6 +2269,7 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
         vData = np.zeros(xSize * ySize, dtype=np.float32)
 
     fwSq = fwKernel * fwKernel
+    kernel_vec_2d = np.array([kernel_vec[idx][:fwSq] for idx in range(nCompKer)], dtype=np.float64)
     image2d = np.asarray(image, dtype=np.float64).reshape(ySize, xSize)
 
     basisList = []
@@ -2250,21 +2317,29 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
     cRdata2d[sy, sx] = output[sy, sx]
 
     if dovar:
+        # 旧版本：用 fftconvolve 做 variance 卷积，nCompKer²/2 次调用，耗时长
+        # vData2d = vData.reshape(ySize, xSize)
+        # var2d = np.asarray(variance, dtype=np.float64).reshape(ySize, xSize)
+        # if convolveVariance:
+        #     varConvMaps = [fftconvolve(var2d, b, mode='same') for b in basisList]
+        #     varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+        #     for i1 in range(nCompKer):
+        #         varOutput += coeffFields[i1] * varConvMaps[i1]
+        # else:
+        #     varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+        #     for i1 in range(nCompKer):
+        #         for j1 in range(i1, nCompKer):
+        #             prod = basisList[i1] * basisList[j1]
+        #             cross = fftconvolve(var2d, prod, mode='same')
+        #             factor = 2.0 if i1 != j1 else 1.0
+        #             varOutput += factor * coeffFields[i1] * coeffFields[j1] * cross
+        # vData2d[sy, sx] = varOutput[sy, sx]
         vData2d = vData.reshape(ySize, xSize)
         var2d = np.asarray(variance, dtype=np.float64).reshape(ySize, xSize)
-        if convolveVariance:
-            varConvMaps = [fftconvolve(var2d, b, mode='same') for b in basisList]
-            varOutput = np.zeros((ySize, xSize), dtype=np.float64)
-            for i1 in range(nCompKer):
-                varOutput += coeffFields[i1] * varConvMaps[i1]
-        else:
-            varOutput = np.zeros((ySize, xSize), dtype=np.float64)
-            for i1 in range(nCompKer):
-                for j1 in range(i1, nCompKer):
-                    prod = basisList[i1] * basisList[j1]
-                    cross = fftconvolve(var2d, prod, mode='same')
-                    factor = 2.0 if i1 != j1 else 1.0
-                    varOutput += factor * coeffFields[i1] * coeffFields[j1] * cross
+        varOutput = np.zeros((ySize, xSize), dtype=np.float64)
+        variance_convolve_jit(var2d, varOutput, xSize, ySize, hwKernel, fwKernel,
+                               np.asarray(kernelSol, dtype=np.float64), kernel_vec_2d,
+                               nCompKer, kerOrder, kcStep, rPixX, rPixY, convolveVariance)
         vData2d[sy, sx] = varOutput[sy, sx]
 
     cMaskView = np.asarray(cMask).reshape(ySize, xSize)
@@ -2319,8 +2394,8 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
     #     else:
     #         mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
     # jit version: inline make_kernel + mask check
-    fwSq = fwKernel * fwKernel
-    kernel_vec_2d = np.array([kernel_vec[idx][:fwSq] for idx in range(nCompKer)], dtype=np.float64)
+    # fwSq = fwKernel * fwKernel  # 已提前创建
+    # kernel_vec_2d = np.array([kernel_vec[idx][:fwSq] for idx in range(nCompKer)], dtype=np.float64)  # 已提前创建
     mask_check_loop_jit(maskPixY, maskPixX, cMaskView, np.asarray(mRData),
                          np.asarray(kernelSol), kernel_vec_2d,
                          nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
