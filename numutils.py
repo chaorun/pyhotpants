@@ -2138,7 +2138,245 @@ def make_model_numpy(sa, si, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSSt
 #     return csModel
 
 
+@numba.jit(nopython=True)
+def fill_stamp_numba_kernel(
+    image, imRef, filterX, filterY,
+    xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
+    rPixX, rPixY, nCompKer, kerOrder, bgOrder,
+    nvec, renFlags_arr, fillVal, mRData1d, verbose,
+    out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val):
+
+    LOCAL_FLAG_INPUT_ISBAD = 0x80
+    fwSqStamp = fwKSStamp * fwKSStamp
+    fwSqKernel = fwKernel * fwKernel
+    nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+
+    # ========== Step 1: inlined xy_conv_stamp_fast_numba_kernel ==========
+    kernels = np.zeros((nvec, fwSqKernel), dtype=np.float64)
+    for n in range(nvec):
+        for jc in range(fwKernel):
+            for ic in range(fwKernel):
+                fy_idx = fwKernel - 1 - jc
+                fx_idx = fwKernel - 1 - ic
+                kernels[n, jc * fwKernel + ic] = filterY[n * fwKernel + fy_idx] * filterX[n * fwKernel + fx_idx]
+
+    for n in range(nvec):
+        for fsi in range(fwSqStamp):
+            out_vectors[n, fsi] = 0.0
+
+    for fsi in range(fwSqStamp):
+        fsi_x = fsi % fwKSStamp
+        fsi_y = fsi // fwKSStamp
+        img_base_x = xi - hwKSStamp + fsi_x - hwKernel
+        img_base_y = yi - hwKSStamp + fsi_y - hwKernel
+        for fki in range(fwSqKernel):
+            kx = fki % fwKernel
+            ky = fki // fwKernel
+            img_x = img_base_x + kx
+            img_y = img_base_y + ky
+            img_val = image[img_x + rPixX * img_y]
+            for n in range(nvec):
+                out_vectors[n, fsi] += kernels[n, fki] * img_val
+
+    for n in range(nvec):
+        if renFlags_arr[n]:
+            for fsi in range(fwSqStamp):
+                out_vectors[n, fsi] -= out_vectors[0, fsi]
+
+    # ========== Step 2: inlined cut_sstamp_numpy ==========
+    for fsi in range(fwSqStamp):
+        out_krefArea[fsi] = fillVal
+
+    sumVal = 0.0
+    for y_offset in range(fwKSStamp):
+        img_y = yi - hwKSStamp + y_offset
+        for x_offset in range(fwKSStamp):
+            img_x = xi - hwKSStamp + x_offset
+            k = img_x + rPixX * img_y
+            dpt = imRef[k]
+            out_krefArea[x_offset + y_offset * fwKSStamp] = dpt
+            if (mRData1d[k] & LOCAL_FLAG_INPUT_ISBAD) == 0:
+                sumVal += abs(dpt)
+
+    out_sum_val[0] = sumVal
+
+    # ========== Step 3: background vectors ==========
+    rPixX2 = np.float64(np.float32(0.5 * rPixX))
+    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+    for y_offset in range(fwKSStamp):
+        j = yi - hwKSStamp + y_offset
+        yf = (j - rPixY2) / rPixY2
+        for x_offset in range(fwKSStamp):
+            i = xi - hwKSStamp + x_offset
+            xf = (i - rPixX2) / rPixX2
+            ipix = x_offset + y_offset * fwKSStamp
+            ax = 1.0
+            nv = nvec
+            for idegx in range(bgOrder + 1):
+                ay = 1.0
+                for idegy in range(bgOrder - idegx + 1):
+                    out_vectors[nv, ipix] = ax * ay
+                    ay *= yf
+                    nv += 1
+                ax *= xf
+
+    # ========== Step 4: inlined build_matrix0_jit ==========
+    ncomp1 = nCompKer
+    pixStamp = fwSqStamp
+
+    for i in range(ncomp1):
+        for j in range(i + 1):
+            q = 0.0
+            for k in range(pixStamp):
+                q += out_vectors[i, k] * out_vectors[j, k]
+            out_mat[i + 1, j + 1] = q
+
+    ivecbg = ncomp1
+    for i1 in range(ncomp1):
+        p0 = 0.0
+        for k in range(pixStamp):
+            p0 += out_vectors[i1, k] * out_vectors[ivecbg, k]
+        out_mat[ncomp1 + 1, i1 + 1] = p0
+
+    q = 0.0
+    for k in range(pixStamp):
+        q += out_vectors[ivecbg, k] * out_vectors[ncomp1, k]
+    out_mat[ncomp1 + 1, ncomp1 + 1] = q
+
+    # ========== Step 5: inlined build_scprod0_jit ==========
+    for i1 in range(ncomp1):
+        p0 = 0.0
+        for xc in range(-hwKSStamp, hwKSStamp + 1):
+            for yc in range(-hwKSStamp, hwKSStamp + 1):
+                k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+                p0 += out_vectors[i1, k] * out_krefArea[k]
+        out_scprod[i1 + 1] = p0
+
+    q = 0.0
+    for xc in range(-hwKSStamp, hwKSStamp + 1):
+        for yc in range(-hwKSStamp, hwKSStamp + 1):
+            k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+            q += out_vectors[ncomp1, k] * out_krefArea[k]
+    out_scprod[ncomp1 + 1] = q
+
+    return 0
+
+
 def fill_stamp_numpy(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+                     hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+                     usePCA, filter_x, filter_y, PCA, fillVal, mRData):
+    # def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+    #                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+    #                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
+    # rPixX2 = float(np.float32(0.5 * rPixX))
+    # rPixY2 = float(np.float32(0.5 * rPixY))
+    #
+    # # if stamp_dict['sscnt'] >= stamp_dict['nss']:
+    # if sa.sscnt[si] >= sa.nss[si]:
+    #     return 1
+    #
+    # sub_width = fwKSStamp + fwKernel - 1
+    # temp = np.zeros(sub_width * fwKSStamp, dtype=np.float32)
+    #
+    # nvec = 0
+    # renFlags = []
+    # for ig in range(ngauss):
+    #     for idegx in range(int(deg_fixe[ig]) + 1):
+    #         for idegy in range(int(deg_fixe[ig]) - idegx + 1):
+    #             ren = 0
+    #             dx = (idegx // 2) * 2 - idegx
+    #             dy = (idegy // 2) * 2 - idegy
+    #             if dx == 0 and dy == 0 and nvec > 0:
+    #                 ren = 1
+    #             # xy_conv_stamp_numpy(stamp_dict, imConv, nvec, ren, usePCA,
+    #             #                     fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+    #             #                     rPixX, filter_x, filter_y, temp, PCA)
+    #             renFlags.append(ren)
+    #             nvec += 1
+    # # xy_conv_stamp_fast_numpy(stamp_dict, imConv, nvec, renFlags, usePCA,
+    # #                           fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+    # #                           rPixX, filter_x, filter_y, temp, PCA)
+    # xy_conv_stamp_fast_numba(sa, si, imConv, nvec, renFlags, usePCA,
+    #                           fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+    #                           rPixX, filter_x, filter_y, temp, PCA)
+
+    # # if cut_sstamp_numpy(stamp_dict, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
+    # if cut_sstamp_numpy(sa, si, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
+    #     return 1
+    #
+    # # xi = int(stamp_dict['xss'][stamp_dict['sscnt']])
+    # xi = int(sa.xss[si, sa.sscnt[si]])
+    # # yi = int(stamp_dict['yss'][stamp_dict['sscnt']])
+    # yi = int(sa.yss[si, sa.sscnt[si]])
+    # di = xi - hwKSStamp
+    # dj = yi - hwKSStamp
+    # for i in range(xi - hwKSStamp, xi + hwKSStamp + 1):
+    #     xf = (i - rPixX2) / rPixX2
+    #     for j in range(yi - hwKSStamp, yi + hwKSStamp + 1):
+    #         yf = (j - rPixY2) / rPixY2
+    #         ax = 1.0
+    #         nv = nvec
+    #         for idegx in range(bgOrder + 1):
+    #             ay = 1.0
+    #             for idegy in range(bgOrder - idegx + 1):
+    #                 # stamp_dict['vectors'][nv][i - di + fwKSStamp * (j - dj)] = ax * ay
+    #                 sa.vectors[si, nv, i - di + fwKSStamp * (j - dj)] = ax * ay
+    #                 ay *= yf
+    #                 nv += 1
+    #             ax *= xf
+    #
+    # # build_matrix0_numpy(stamp_dict, nCompKer, kerOrder, bgOrder, fwKSStamp)
+    # build_matrix0_numpy(sa, si, nCompKer, kerOrder, bgOrder, fwKSStamp)
+    # # build_scprod0_numpy(stamp_dict, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
+    # build_scprod0_numpy(sa, si, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
+
+    # # ===== comparison: fill_stamp_numba vs fill_stamp_numpy =====
+    # if verbose:
+    #     nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    #     fwSqStamp = fwKSStamp * fwKSStamp
+    #     nC = nCompKer + nbg
+    #
+    #     cmp_vectors = np.zeros((nvec + nbg, fwSqStamp), dtype=np.float64)
+    #     cmp_krefArea = np.zeros(fwSqStamp, dtype=np.float64)
+    #     cmp_mat = np.zeros((nC, nC), dtype=np.float64)
+    #     cmp_scprod = np.zeros(nC, dtype=np.float64)
+    #     cmp_sum_val = np.zeros(1, dtype=np.float64)
+    #
+    #     xi_val = int(sa.xss[si, sa.sscnt[si]])
+    #     yi_val = int(sa.yss[si, sa.sscnt[si]])
+    #     img_flat = np.asarray(imConv, dtype=np.float64).ravel()
+    #     imRef_flat = np.asarray(imRef, dtype=np.float64).ravel()
+    #     fx = np.asarray(filter_x, dtype=np.float64)
+    #     fy = np.asarray(filter_y, dtype=np.float64)
+    #     rflags = np.array(renFlags, dtype=np.int32)
+    #     mRData1d = mRData.ravel()
+    #
+    #     fill_stamp_numba_kernel(
+    #         img_flat, imRef_flat, fx, fy,
+    #         xi_val, yi_val, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
+    #         rPixX, rPixY, nCompKer, kerOrder, bgOrder,
+    #         nvec, rflags, fillVal, mRData1d, verbose,
+    #         cmp_vectors, cmp_krefArea, cmp_mat, cmp_scprod, cmp_sum_val)
+    #
+    #     diff_vectors = np.max(np.abs(cmp_vectors - sa.vectors[si, :nvec + nbg, :fwSqStamp]))
+    #     diff_krefArea = np.max(np.abs(cmp_krefArea - sa.krefArea[si, :fwSqStamp]))
+    #     diff_mat = np.max(np.abs(cmp_mat[:nCompKer + 2, :nCompKer + 2] - sa.mat[si, :nCompKer + 2, :nCompKer + 2]))
+    #     diff_scprod = np.max(np.abs(cmp_scprod[:nCompKer + 2] - sa.scprod[si, :nCompKer + 2]))
+    #
+    #     import sys
+    #     sys.stderr.write("fill_stamp compare si=%d: vectors_diff=%.6e krefArea_diff=%.6e mat_diff=%.6e scprod_diff=%.6e\n" % (
+    #         si, diff_vectors, diff_krefArea, diff_mat, diff_scprod))
+    #     sys.stderr.flush()
+    #
+    # return 0
+
+    # ===== new: delegate to fill_stamp_numba =====
+    return fill_stamp_numba(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+                           hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+                           usePCA, filter_x, filter_y, PCA, fillVal, mRData)
+
+
+def fill_stamp_numpy_deprecated_1781967154(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
     # def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
@@ -2164,25 +2402,16 @@ def fill_stamp_numpy(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_f
                 dy = (idegy // 2) * 2 - idegy
                 if dx == 0 and dy == 0 and nvec > 0:
                     ren = 1
-                # xy_conv_stamp_numpy(stamp_dict, imConv, nvec, ren, usePCA,
-                #                     fwKSStamp, fwKernel, hwKSStamp, hwKernel,
-                #                     rPixX, filter_x, filter_y, temp, PCA)
                 renFlags.append(ren)
                 nvec += 1
-    # xy_conv_stamp_fast_numpy(stamp_dict, imConv, nvec, renFlags, usePCA,
-    #                           fwKSStamp, fwKernel, hwKSStamp, hwKernel,
-    #                           rPixX, filter_x, filter_y, temp, PCA)
     xy_conv_stamp_fast_numba(sa, si, imConv, nvec, renFlags, usePCA,
                               fwKSStamp, fwKernel, hwKSStamp, hwKernel,
                               rPixX, filter_x, filter_y, temp, PCA)
 
-    # if cut_sstamp_numpy(stamp_dict, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
     if cut_sstamp_numpy(sa, si, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
         return 1
 
-    # xi = int(stamp_dict['xss'][stamp_dict['sscnt']])
     xi = int(sa.xss[si, sa.sscnt[si]])
-    # yi = int(stamp_dict['yss'][stamp_dict['sscnt']])
     yi = int(sa.yss[si, sa.sscnt[si]])
     di = xi - hwKSStamp
     dj = yi - hwKSStamp
@@ -2195,16 +2424,80 @@ def fill_stamp_numpy(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_f
             for idegx in range(bgOrder + 1):
                 ay = 1.0
                 for idegy in range(bgOrder - idegx + 1):
-                    # stamp_dict['vectors'][nv][i - di + fwKSStamp * (j - dj)] = ax * ay
                     sa.vectors[si, nv, i - di + fwKSStamp * (j - dj)] = ax * ay
                     ay *= yf
                     nv += 1
                 ax *= xf
 
-    # build_matrix0_numpy(stamp_dict, nCompKer, kerOrder, bgOrder, fwKSStamp)
     build_matrix0_numpy(sa, si, nCompKer, kerOrder, bgOrder, fwKSStamp)
-    # build_scprod0_numpy(stamp_dict, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
     build_scprod0_numpy(sa, si, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
+
+    return 0
+
+
+def fill_stamp_numba(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+                     hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+                     usePCA, filter_x, filter_y, PCA, fillVal, mRData):
+    # def fill_stamp_numba(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+    #                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+    #                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
+    if sa.sscnt[si] >= sa.nss[si]:
+        return 1
+
+    # if usePCA:
+    #     return 1
+
+    nvec = 0
+    renFlags = []
+    for ig in range(ngauss):
+        for idegx in range(int(deg_fixe[ig]) + 1):
+            for idegy in range(int(deg_fixe[ig]) - idegx + 1):
+                ren = 0
+                dx = (idegx // 2) * 2 - idegx
+                dy = (idegy // 2) * 2 - idegy
+                if dx == 0 and dy == 0 and nvec > 0:
+                    ren = 1
+                renFlags.append(ren)
+                nvec += 1
+
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    yi = int(sa.yss[si, sa.sscnt[si]])
+
+    img_flat = np.asarray(imConv, dtype=np.float64).ravel()
+    imRef_flat = np.asarray(imRef, dtype=np.float64).ravel()
+    fx = np.asarray(filter_x, dtype=np.float64)
+    fy = np.asarray(filter_y, dtype=np.float64)
+    rflags = np.array(renFlags, dtype=np.int32)
+    mRData1d = mRData.ravel()
+
+    nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    fwSqStamp = fwKSStamp * fwKSStamp
+    nC = nCompKer + 1
+
+    out_vectors = np.zeros((nvec + nbg, fwSqStamp), dtype=np.float64)
+    out_krefArea = np.zeros(fwSqStamp, dtype=np.float64)
+    out_mat = np.zeros((nC, nC), dtype=np.float64)
+    out_scprod = np.zeros(nC, dtype=np.float64)
+    out_sum_val = np.zeros(1, dtype=np.float64)
+
+    fill_stamp_numba_kernel(
+        img_flat, imRef_flat, fx, fy,
+        xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
+        rPixX, rPixY, nCompKer, kerOrder, bgOrder,
+        nvec, rflags, fillVal, mRData1d, verbose,
+        out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val)
+
+    # for n in range(nvec + nbg):
+    #     sa.vectors[si, n, :fwSqStamp] = out_vectors[n]
+    sa.vectors[si, :nvec + nbg, :fwSqStamp] = out_vectors
+    # sa.krefArea[si, :] = out_krefArea
+    sa.krefArea[si, :] = out_krefArea
+    # sa.mat[si, :nC, :nC] = out_mat
+    sa.mat[si, :nC, :nC] = out_mat
+    # sa.scprod[si, :nC] = out_scprod
+    sa.scprod[si, :nC] = out_scprod
+    # sa.sum_val[si] = out_sum_val[0]
+    sa.sum_val[si] = out_sum_val[0]
 
     return 0
 
