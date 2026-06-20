@@ -22,12 +22,14 @@ FLAG_OUTPUT_ISBAD = 0x8000
 
 
 def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
-    """返回 (mean, stdev, return_code)"""
+    """返回 (mean, stdev, return_code) — 矢量化版本"""
     count = len(data)
     if count == 0:
         return (0.0, MAXVAL, 1)
 
-    smask = [False] * count
+    # 截断为float32再转float64，模拟原始 float32 中间精度行为
+    arr = np.asarray(data, dtype=np.float32).astype(np.float64)
+    mask = np.zeros(count, dtype=bool)
     cnt = 0
     ncnt = count
     iternum = 0
@@ -36,36 +38,78 @@ def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
 
     while (ncnt != cnt) and (iternum < maxiter):
         cnt = ncnt
-        mean_val = 0.0
-        stdev_val = 0.0
-        for i in range(count):
-            if not smask[i]:
-                d = np.float32(data[i])
-                mean_val += float(d)
-                stdev_val += float(d * d)
+
+        good = arr[~mask]
+        ncnt = len(good)
 
         if ncnt > 0:
-            mean_val /= ncnt
+            mean_val = float(good.mean())
         else:
             return (0.0, MAXVAL, 2)
 
         if ncnt > 1:
-            stdev_val = stdev_val - ncnt * mean_val * mean_val
-            stdev_val = math.sqrt(stdev_val / float(ncnt - 1))
+            stdev_val = float(good.std(ddof=1))
         else:
             return (mean_val, MAXVAL, 3)
 
-        ncnt = 0
         istdev = 1.0 / stdev_val
-        for i in range(count):
-            if not smask[i]:
-                if (abs(float(data[i]) - mean_val) * istdev) > stat_sig:
-                    smask[i] = True
-                else:
-                    ncnt += 1
+
+        deviations = np.abs(good - mean_val) * istdev
+        new_outliers = deviations > stat_sig
+
+        good_indices = np.where(~mask)[0]
+        mask[good_indices[new_outliers]] = True
+        ncnt = count - int(np.sum(mask))
+
         iternum += 1
 
     return (mean_val, stdev_val, 0)
+
+# def sigma_clip_numpy_old(data, maxiter=10, stat_sig=3.0):
+#     """返回 (mean, stdev, return_code)"""
+#     count = len(data)
+#     if count == 0:
+#         return (0.0, MAXVAL, 1)
+#
+#     smask = [False] * count
+#     cnt = 0
+#     ncnt = count
+#     iternum = 0
+#     mean_val = 0.0
+#     stdev_val = 0.0
+#
+#     while (ncnt != cnt) and (iternum < maxiter):
+#         cnt = ncnt
+#         mean_val = 0.0
+#         stdev_val = 0.0
+#         for i in range(count):
+#             if not smask[i]:
+#                 d = np.float32(data[i])
+#                 mean_val += float(d)
+#                 stdev_val += float(d * d)
+#
+#         if ncnt > 0:
+#             mean_val /= ncnt
+#         else:
+#             return (0.0, MAXVAL, 2)
+#
+#         if ncnt > 1:
+#             stdev_val = stdev_val - ncnt * mean_val * mean_val
+#             stdev_val = math.sqrt(stdev_val / float(ncnt - 1))
+#         else:
+#             return (mean_val, MAXVAL, 3)
+#
+#         ncnt = 0
+#         istdev = 1.0 / stdev_val
+#         for i in range(count):
+#             if not smask[i]:
+#                 if (abs(float(data[i]) - mean_val) * istdev) > stat_sig:
+#                     smask[i] = True
+#                 else:
+#                     ncnt += 1
+#         iternum += 1
+#
+#     return (mean_val, stdev_val, 0)
 
 
 def get_noise_stats3_numpy(data, noise, umask, smask, rPixX, rPixY, mRData):
@@ -2389,7 +2433,7 @@ def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
         else:
             nskippedSubstamps += 1
 
-    mean, stdev, retcode = sigma_clip_numpy(ss[:nss].copy(), maxiter=10, stat_sig=statSig)
+    mean, stdev, retcode = sigma_clip_numpy(ss[:nss], maxiter=10, stat_sig=statSig)
 
     meansigSubstamps = mean
     scatterSubstamps = stdev
