@@ -747,6 +747,40 @@ def cut_sstamp_numpy(sa, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData
     return 0
 
 
+@numba.jit(nopython=True)
+def check_psf_center_numba(iData, imax, jmax, xLen, yLen, sx0, sy0,
+                             hiThresh, sky, invdsky,
+                             xbuffer, ybuffer, bbit, bbit1,
+                             rPixX, hwKSStamp, mRData, kerFitThresh):
+    kerFitThresh = np.float64(np.float32(kerFitThresh))
+    brk = 0
+    dmax2 = 0.0
+    for l in range(jmax - hwKSStamp, jmax + hwKSStamp + 1):
+        if l < ybuffer or l >= yLen - ybuffer:
+            continue
+        yr2 = l + sy0
+        for k in range(imax - hwKSStamp, imax + hwKSStamp + 1):
+            if k < xbuffer or k >= xLen - xbuffer:
+                continue
+            xr2 = k + sx0
+            nr2 = xr2 + rPixX * yr2
+            if mRData[nr2] & bbit:
+                brk = 1
+                dmax2 = 0.0
+                break
+            dpt2 = iData[nr2]
+            if dpt2 >= hiThresh:
+                mRData[nr2] = mRData[nr2] | bbit1
+                brk = 1
+                dmax2 = 0.0
+                break
+            if ((dpt2 - sky) * invdsky) > kerFitThresh:
+                dmax2 += dpt2
+        if brk == 1:
+            break
+    return dmax2
+
+
 def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
                             hiThresh, sky, invdsky,
                             xbuffer, ybuffer, bbit, bbit1,
@@ -1085,15 +1119,117 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
     if forceConvolve != "i":
         # nss = ctStamps[ntS]['nss']
         nss = ctSa.nss[ntS]
+        # if getCenters:
+        #     # get_psf_centers_numpy(
+        #     #     ctStamps[ntS], tRData1d, sPixX, sPixY,
+        #     #     tUKThresh, bbitt1, bbitt2, nKSStamps,
+        #     #     hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
+        #     get_psf_centers_numpy(
+        #         ctSa, ntS, tRData1d, sPixX, sPixY,
+        #         tUKThresh, bbitt1, bbitt2, nKSStamps,
+        #         hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
+        # else:
+        #     [注释] 原 else 分支逻辑由下方内联代码替代
         if getCenters:
-            # get_psf_centers_numpy(
-            #     ctStamps[ntS], tRData1d, sPixX, sPixY,
-            #     tUKThresh, bbitt1, bbitt2, nKSStamps,
-            #     hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
-            get_psf_centers_numpy(
-                ctSa, ntS, tRData1d, sPixX, sPixY,
-                tUKThresh, bbitt1, bbitt2, nKSStamps,
-                hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
+            # [内联] get_psf_centers_numpy(ctSa, ntS, tRData1d, ...) 内联开始
+            kerFitThresh_t = float(np.float32(kerFitThresh))
+            dfrac = 0.9
+            if ctSa.nss[ntS] < nKSStamps:
+                bbit = bbitt1 | bbitt2 | 0xbf
+                sky = ctSa.mode[ntS]
+                invdsky = 1.0 / ctSa.fwhm[ntS]
+                sx0 = ctSa.x0[ntS]
+                sy0 = ctSa.y0[ntS]
+                xbuffer = 0
+                ybuffer = 0
+                floorVal = sky + kerFitThresh_t * ctSa.fwhm[ntS]
+                allocSize = max(1, (sPixX * sPixY) // hwKSStamp)
+                xloc = np.zeros(allocSize, dtype=np.int32)
+                yloc = np.zeros(allocSize, dtype=np.int32)
+                peaks = np.zeros(allocSize, dtype=np.float64)
+                brk = 0
+                pcnt = 0
+                fcnt = 2 * nKSStamps
+                while pcnt < fcnt:
+                    loPsf = sky + (tUKThresh - sky) * dfrac
+                    loPsf = max(loPsf, floorVal)
+                    for j in range(ybuffer, sPixY - ybuffer):
+                        yr = j + sy0
+                        for i in range(xbuffer, sPixX - xbuffer):
+                            xr = i + sx0
+                            nr = xr + rPixX * yr
+                            if int(mRData1d[nr]) & bbit:
+                                continue
+                            dpt = float(tRData1d[nr])
+                            if dpt >= tUKThresh:
+                                mRData1d[nr] = int(mRData1d[nr]) | bbitt1
+                                continue
+                            if ((dpt - sky) * invdsky) < kerFitThresh_t:
+                                continue
+                            if dpt > loPsf:
+                                dmax = dpt
+                                imaxVal = i
+                                jmaxVal = j
+                                for l in range(j - hwKSStamp, j + hwKSStamp + 1):
+                                    yr2 = l + sy0
+                                    if l < ybuffer or l >= sPixY - ybuffer:
+                                        continue
+                                    for k in range(i - hwKSStamp, i + hwKSStamp + 1):
+                                        xr2 = k + sx0
+                                        nr2 = xr2 + rPixX * yr2
+                                        if k < xbuffer or k >= sPixX - xbuffer:
+                                            continue
+                                        if int(mRData1d[nr2]) & bbit:
+                                            continue
+                                        dpt2 = float(tRData1d[nr2])
+                                        if dpt2 >= tUKThresh:
+                                            mRData1d[nr2] = int(mRData1d[nr2]) | bbitt1
+                                            continue
+                                        if ((dpt2 - sky) * invdsky) < kerFitThresh_t:
+                                            continue
+                                        if dpt2 > dmax:
+                                            dmax = dpt2
+                                            imaxVal = k
+                                            jmaxVal = l
+                                dmax2 = check_psf_center_numba(
+                                    tRData1d, imaxVal, jmaxVal, sPixX, sPixY,
+                                    sx0, sy0, tUKThresh, sky, invdsky,
+                                    xbuffer, ybuffer, bbit, bbitt1,
+                                    rPixX, hwKSStamp, mRData1d, kerFitThresh_t)
+                                if dmax2 == 0.0:
+                                    continue
+                                xloc[pcnt] = imaxVal
+                                yloc[pcnt] = jmaxVal
+                                peaks[pcnt] = dmax2
+                                pcnt += 1
+                                for l in range(jmaxVal - hwKSStamp, jmaxVal + hwKSStamp + 1):
+                                    yr2 = l + sy0
+                                    for k in range(imaxVal - hwKSStamp, imaxVal + hwKSStamp + 1):
+                                        xr2 = k + sx0
+                                        nr2 = xr2 + rPixX * yr2
+                                        if (k > 0) and (k < sPixX) and (l > 0) and (l < sPixY):
+                                            mRData1d[nr2] = int(mRData1d[nr2]) | bbitt2
+                                if pcnt >= fcnt:
+                                    brk = 2
+                            if brk == 2:
+                                break
+                        if brk == 2:
+                            break
+                    if loPsf == floorVal:
+                        break
+                    dfrac -= 0.2
+                if pcnt > 0:
+                    qs = np.argsort(peaks[:pcnt])
+                    nssOrig = ctSa.nss[ntS]
+                    idx = nssOrig
+                    jj = 0
+                    while jj < pcnt and idx < nKSStamps:
+                        ctSa.xss[ntS, idx] = xloc[qs[pcnt - jj - 1]] + sx0
+                        ctSa.yss[ntS, idx] = yloc[qs[pcnt - jj - 1]] + sy0
+                        ctSa.nss[ntS] += 1
+                        idx += 1
+                        jj += 1
+            # [内联] get_psf_centers_numpy 内联结束
         else:
             if nss < nKSStamps:
                 if hardX:
@@ -1106,7 +1242,7 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 else:
                     ymax = sYMin + fwStamp // 2
 
-                check = check_psf_center_numpy(
+                check = check_psf_center_numba(
                     tRData1d,
                     # xmax - ctStamps[ntS]['x0'],
                     xmax - ctSa.x0[ntS],
@@ -1141,15 +1277,117 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
     if forceConvolve != "t":
         # nss = ciStamps[niS]['nss']
         nss = ciSa.nss[niS]
+        # if getCenters:
+        #     # get_psf_centers_numpy(
+        #     #     ciStamps[niS], iRData1d, sPixX, sPixY,
+        #     #     iUKThresh, bbiti1, bbiti2, nKSStamps,
+        #     #     hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
+        #     get_psf_centers_numpy(
+        #         ciSa, niS, iRData1d, sPixX, sPixY,
+        #         iUKThresh, bbiti1, bbiti2, nKSStamps,
+        #         hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
+        # else:
+        #     [注释] 原 else 分支逻辑由下方内联代码替代
         if getCenters:
-            # get_psf_centers_numpy(
-            #     ciStamps[niS], iRData1d, sPixX, sPixY,
-            #     iUKThresh, bbiti1, bbiti2, nKSStamps,
-            #     hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
-            get_psf_centers_numpy(
-                ciSa, niS, iRData1d, sPixX, sPixY,
-                iUKThresh, bbiti1, bbiti2, nKSStamps,
-                hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
+            # [内联] get_psf_centers_numpy(ciSa, niS, iRData1d, ...) 内联开始
+            kerFitThresh_i = float(np.float32(kerFitThresh))
+            dfrac = 0.9
+            if ciSa.nss[niS] < nKSStamps:
+                bbit = bbiti1 | bbiti2 | 0xbf
+                sky = ciSa.mode[niS]
+                invdsky = 1.0 / ciSa.fwhm[niS]
+                sx0 = ciSa.x0[niS]
+                sy0 = ciSa.y0[niS]
+                xbuffer = 0
+                ybuffer = 0
+                floorVal = sky + kerFitThresh_i * ciSa.fwhm[niS]
+                allocSize = max(1, (sPixX * sPixY) // hwKSStamp)
+                xloc = np.zeros(allocSize, dtype=np.int32)
+                yloc = np.zeros(allocSize, dtype=np.int32)
+                peaks = np.zeros(allocSize, dtype=np.float64)
+                brk = 0
+                pcnt = 0
+                fcnt = 2 * nKSStamps
+                while pcnt < fcnt:
+                    loPsf = sky + (iUKThresh - sky) * dfrac
+                    loPsf = max(loPsf, floorVal)
+                    for j in range(ybuffer, sPixY - ybuffer):
+                        yr = j + sy0
+                        for i in range(xbuffer, sPixX - xbuffer):
+                            xr = i + sx0
+                            nr = xr + rPixX * yr
+                            if int(mRData1d[nr]) & bbit:
+                                continue
+                            dpt = float(iRData1d[nr])
+                            if dpt >= iUKThresh:
+                                mRData1d[nr] = int(mRData1d[nr]) | bbiti1
+                                continue
+                            if ((dpt - sky) * invdsky) < kerFitThresh_i:
+                                continue
+                            if dpt > loPsf:
+                                dmax = dpt
+                                imaxVal = i
+                                jmaxVal = j
+                                for l in range(j - hwKSStamp, j + hwKSStamp + 1):
+                                    yr2 = l + sy0
+                                    if l < ybuffer or l >= sPixY - ybuffer:
+                                        continue
+                                    for k in range(i - hwKSStamp, i + hwKSStamp + 1):
+                                        xr2 = k + sx0
+                                        nr2 = xr2 + rPixX * yr2
+                                        if k < xbuffer or k >= sPixX - xbuffer:
+                                            continue
+                                        if int(mRData1d[nr2]) & bbit:
+                                            continue
+                                        dpt2 = float(iRData1d[nr2])
+                                        if dpt2 >= iUKThresh:
+                                            mRData1d[nr2] = int(mRData1d[nr2]) | bbiti1
+                                            continue
+                                        if ((dpt2 - sky) * invdsky) < kerFitThresh_i:
+                                            continue
+                                        if dpt2 > dmax:
+                                            dmax = dpt2
+                                            imaxVal = k
+                                            jmaxVal = l
+                                dmax2 = check_psf_center_numba(
+                                    iRData1d, imaxVal, jmaxVal, sPixX, sPixY,
+                                    sx0, sy0, iUKThresh, sky, invdsky,
+                                    xbuffer, ybuffer, bbit, bbiti1,
+                                    rPixX, hwKSStamp, mRData1d, kerFitThresh_i)
+                                if dmax2 == 0.0:
+                                    continue
+                                xloc[pcnt] = imaxVal
+                                yloc[pcnt] = jmaxVal
+                                peaks[pcnt] = dmax2
+                                pcnt += 1
+                                for l in range(jmaxVal - hwKSStamp, jmaxVal + hwKSStamp + 1):
+                                    yr2 = l + sy0
+                                    for k in range(imaxVal - hwKSStamp, imaxVal + hwKSStamp + 1):
+                                        xr2 = k + sx0
+                                        nr2 = xr2 + rPixX * yr2
+                                        if (k > 0) and (k < sPixX) and (l > 0) and (l < sPixY):
+                                            mRData1d[nr2] = int(mRData1d[nr2]) | bbiti2
+                                if pcnt >= fcnt:
+                                    brk = 2
+                            if brk == 2:
+                                break
+                        if brk == 2:
+                            break
+                    if loPsf == floorVal:
+                        break
+                    dfrac -= 0.2
+                if pcnt > 0:
+                    qs = np.argsort(peaks[:pcnt])
+                    nssOrig = ciSa.nss[niS]
+                    idx = nssOrig
+                    jj = 0
+                    while jj < pcnt and idx < nKSStamps:
+                        ciSa.xss[niS, idx] = xloc[qs[pcnt - jj - 1]] + sx0
+                        ciSa.yss[niS, idx] = yloc[qs[pcnt - jj - 1]] + sy0
+                        ciSa.nss[niS] += 1
+                        idx += 1
+                        jj += 1
+            # [内联] get_psf_centers_numpy 内联结束
         else:
             if nss < nKSStamps:
                 if hardX:
@@ -1162,7 +1400,7 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 else:
                     ymax = sYMin + fwStamp // 2
 
-                check = check_psf_center_numpy(
+                check = check_psf_center_numba(
                     iRData1d,
                     # xmax - ciStamps[niS]['x0'],
                     xmax - ciSa.x0[niS],
