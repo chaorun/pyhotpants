@@ -1711,3 +1711,907 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
         'NskippedSubstamps': nskippedSubstamps,
         'stamps': stamps_dicts,
     }
+
+
+def allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC):
+    fwSq = fwKSStamp * fwKSStamp
+    nVec = nCompKer + nBGVectors
+    return {
+        'x0': 0, 'y0': 0,
+        'x': 0, 'y': 0,
+        'nx': 0, 'ny': 0,
+        'nss': 0, 'sscnt': 0,
+        'xss': np.zeros(nKSStamps, dtype=np.int32),
+        'yss': np.zeros(nKSStamps, dtype=np.int32),
+        'krefArea': np.zeros(fwSq, dtype=np.float64),
+        'scprod': np.zeros(nC, dtype=np.float64),
+        'vectors': np.zeros((nVec, fwSq), dtype=np.float64),
+        'mat': np.zeros((nC, nC), dtype=np.float64),
+        'chi2': 0.0, 'norm': 0.0, 'diff': 0.0,
+        'sum': 0.0, 'mean': 0.0, 'median': 0.0,
+        'mode': 0.0, 'sd': 0.0,
+        'fwhm': 0.0, 'lfwhm': 0.0,
+    }
+
+
+def make_noise_image4_numpy(data1d, invGain, quad, rPixX, rPixY):
+    qquad = float(quad) * float(quad)
+    nData = np.abs(data1d.astype(np.float64)) * float(invGain) + qquad
+    return nData.astype(np.float32)
+
+
+def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConvolve):
+    import sys
+
+    nCompKer = ctx_info['nCompKer']
+    nBGVectors = ctx_info['nBGVectors']
+    nC = ctx_info['nC']
+    fwStamp = ctx_info['fwStamp']
+    fwKSStamp = ctx_info['fwKSStamp']
+    fwKernel = ctx_info['fwKernel']
+    nStamps = ctx_info['nStamps']
+    nStampX = ctx_info['nStampX']
+    nStampY = ctx_info['nStampY']
+    fitThresh = ctx_info['fitThresh']
+
+    hwKernel = params_info['hwKernel']
+    ngauss = params_info['ngauss']
+    deg_fixe = params_info['deg_fixe']
+    sigma_gauss = params_info['sigma_gauss']
+    hwKSStamp = params_info['hwKSStamp']
+    nKSStamps = params_info['nKSStamps']
+    scaleFitThresh = params_info['scaleFitThresh']
+    minFracGoodStamps = params_info['minFracGoodStamps']
+    tUKThresh = params_info['tUKThresh']
+    iUKThresh = params_info['iUKThresh']
+    verbose = params_info.get('verbose', 0)
+    usePCA = params_info.get('usePCA', 0)
+    PCA = params_info.get('PCA', None)
+    xcmp = params_info.get('xcmp', None)
+    ycmp = params_info.get('ycmp', None)
+    Ncmp = params_info.get('Ncmp', 0)
+    statSig = params_info['statSig']
+    findSSC = params_info.get('findSSC', 0)
+
+    tRData = setup_result['tRData']
+    iRData = setup_result['iRData']
+    mRData = setup_result['mRData']
+    rXBMin = setup_result['rXBMin']
+    rYBMin = setup_result['rYBMin']
+    rXBMax = setup_result['rXBMax']
+    rYBMax = setup_result['rYBMax']
+    rPixX = setup_result['rPixX']
+    rPixY = setup_result['rPixY']
+
+    tRData1d = tRData.ravel()
+    iRData1d = iRData.ravel()
+    mRData1d = mRData.ravel()
+
+    useFullSS = 0
+
+    status = 1
+    flag = 1
+    kerFitThresh = fitThresh
+    ctStamps = None
+    ciStamps = None
+
+    while (status <= 2) and flag:
+        flag = 0
+        niS = 0
+        ntS = 0
+
+        if localForceConvolve != "i":
+            ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                        for _ in range(nStamps)]
+        if localForceConvolve != "t":
+            ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                        for _ in range(nStamps)]
+
+        for l in range(nStampY):
+            for k in range(nStampX):
+                sys.stderr.write("Build stamp  : t %4d i %4d (grid coord %2d %2d)\n" % (ntS, niS, k, l))
+
+                sXMin = rXBMin + k * rPixX // nStampX
+                sYMin = rYBMin + l * rPixY // nStampY
+                sXMax = min(sXMin + fwStamp - 1, rXBMax)
+                sYMax = min(sYMin + fwStamp - 1, rYBMax)
+
+                if localForceConvolve != "i":
+                    ctStamps[ntS]['sscnt'] = 0
+                    ctStamps[ntS]['nss'] = 0
+                    ctStamps[ntS]['chi2'] = 0.0
+                if localForceConvolve != "t":
+                    ciStamps[niS]['sscnt'] = 0
+                    ciStamps[niS]['nss'] = 0
+                    ciStamps[niS]['chi2'] = 0.0
+
+                if xcmp is not None and Ncmp > 0:
+                    if verbose >= 2:
+                        sys.stderr.write("Adding centers manually\n")
+                    for m in range(Ncmp):
+                        if (xcmp[m] > sXMin + hwKernel + 1) and (xcmp[m] < sXMax - hwKernel - 1) and \
+                           (ycmp[m] > sYMin + hwKernel + 1) and (ycmp[m] < sYMax - hwKernel - 1):
+                            build_stamps_numpy(
+                                sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                                rXBMin, rYBMin, ciStamps, ctStamps,
+                                iRData1d, tRData1d,
+                                xcmp[m] - rXBMin, ycmp[m] - rYBMin,
+                                verbose, localForceConvolve, rPixX, rPixY,
+                                tUKThresh, iUKThresh, hwKSStamp,
+                                fwStamp, nKSStamps, kerFitThresh,
+                                mRData1d, statSig)
+                    if findSSC:
+                        if verbose >= 2:
+                            sys.stderr.write("Automatically finding additional centers\n")
+                        build_stamps_numpy(
+                            sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
+                            rXBMin, rYBMin, ciStamps, ctStamps,
+                            iRData1d, tRData1d, 0, 0,
+                            verbose, localForceConvolve, rPixX, rPixY,
+                            tUKThresh, iUKThresh, hwKSStamp,
+                            fwStamp, nKSStamps, kerFitThresh,
+                            mRData1d, statSig)
+                else:
+                    if useFullSS:
+                        build_stamps_numpy(
+                            sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                            rXBMin, rYBMin, ciStamps, ctStamps,
+                            iRData1d, tRData1d, 0, 0,
+                            verbose, localForceConvolve, rPixX, rPixY,
+                            tUKThresh, iUKThresh, hwKSStamp,
+                            fwStamp, nKSStamps, kerFitThresh,
+                            mRData1d, statSig)
+                    else:
+                        build_stamps_numpy(
+                            sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
+                            rXBMin, rYBMin, ciStamps, ctStamps,
+                            iRData1d, tRData1d, 0, 0,
+                            verbose, localForceConvolve, rPixX, rPixY,
+                            tUKThresh, iUKThresh, hwKSStamp,
+                            fwStamp, nKSStamps, kerFitThresh,
+                            mRData1d, statSig)
+
+                if localForceConvolve != "i":
+                    if verbose >= 2:
+                        sys.stderr.write("    templ: %d substamps\n" % ctStamps[ntS]['nss'])
+                    if ctStamps[ntS]['nss'] > 0:
+                        ntS += 1
+                if localForceConvolve != "t":
+                    if verbose >= 2:
+                        sys.stderr.write("    image: %d substamps\n" % ciStamps[niS]['nss'])
+                    if ciStamps[niS]['nss'] > 0:
+                        niS += 1
+
+        iSFrac = niS / float(nStamps)
+        tSFrac = ntS / float(nStamps)
+
+        if localForceConvolve == "i":
+            sys.stderr.write("%d stamps built (%.2f%%)\n\n" % (niS, iSFrac))
+            if iSFrac < minFracGoodStamps:
+                flag = 1
+        elif localForceConvolve == "t":
+            sys.stderr.write("%d stamps built (%.2f%%)\n\n" % (ntS, tSFrac))
+            if tSFrac < minFracGoodStamps:
+                flag = 1
+        elif (iSFrac < minFracGoodStamps) or (tSFrac < minFracGoodStamps):
+            sys.stderr.write("%d and %d stamps built (%.2f%%, %.2f%%)\n\n" % (ntS, niS, tSFrac, iSFrac))
+            flag = 1
+        else:
+            sys.stderr.write("%d and %d stamps built (%.2f%%, %.2f%%)\n\n" % (ntS, niS, tSFrac, iSFrac))
+            break
+
+        if flag and (status <= 1) and (scaleFitThresh < 1.0):
+            kerFitThresh *= scaleFitThresh
+            sys.stderr.write("Too few stamps were fit, scaling down fitting threshold to %.2f\n" % kerFitThresh)
+
+            if localForceConvolve != "i":
+                ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                            for _ in range(nStamps)]
+            if localForceConvolve != "t":
+                ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                            for _ in range(nStamps)]
+
+            mRData1d[:] = mRData1d & ~0xa00
+
+        status += 1
+
+    if (niS == 0) and (ntS == 0):
+        return {'niS': 0, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+                'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
+    if localForceConvolve == "i":
+        if niS == 0:
+            return {'niS': 0, 'ntS': ntS, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+                    'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
+    if localForceConvolve == "t":
+        if ntS == 0:
+            return {'niS': niS, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+                    'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
+
+    filter_x = np.zeros(fwKernel * nCompKer, dtype=np.float64)
+    filter_y = np.zeros(fwKernel * nCompKer, dtype=np.float64)
+    kernel_vec = get_kernel_vec_numpy(ngauss, deg_fixe, usePCA, fwKernel, hwKernel,
+                                      sigma_gauss, filter_x, filter_y, PCA)
+
+    return {
+        'niS': niS, 'ntS': ntS,
+        'ctStamps': ctStamps,
+        'ciStamps': ciStamps,
+        'kernel_vec': kernel_vec,
+        'filter_x': filter_x,
+        'filter_y': filter_y,
+        'status': 0,
+    }
+
+
+def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, localForceConvolve):
+    import sys
+
+    nCompKer = ctx_info['nCompKer']
+    nBGVectors = ctx_info['nBGVectors']
+    nC = ctx_info['nC']
+    nCompTotal = ctx_info['nCompTotal']
+    fwKSStamp = ctx_info['fwKSStamp']
+    fwKernel = ctx_info['fwKernel']
+
+    hwKernel = params_info['hwKernel']
+    ngauss = params_info['ngauss']
+    deg_fixe = params_info['deg_fixe']
+    kerOrder = params_info['kerOrder']
+    bgOrder = params_info['bgOrder']
+    hwKSStamp = params_info['hwKSStamp']
+    verbose = params_info.get('verbose', 0)
+    usePCA = params_info.get('usePCA', 0)
+    PCA = params_info.get('PCA', None)
+    statSig = params_info['statSig']
+    kerSigReject = params_info['kerSigReject']
+    fillVal = params_info['fillVal']
+    figMerit = params_info['figMerit']
+
+    tRData = setup_result['tRData']
+    iRData = setup_result['iRData']
+    oRData = setup_result['oRData']
+    mRData = setup_result['mRData']
+    rPixX = setup_result['rPixX']
+    rPixY = setup_result['rPixY']
+
+    tRData1d = tRData.ravel()
+    iRData1d = iRData.ravel()
+    oRData1d = oRData.ravel()
+    mRData1d = mRData.ravel()
+
+    ctStamps = buildstamps_result['ctStamps']
+    ciStamps = buildstamps_result['ciStamps']
+    ntS = buildstamps_result['ntS']
+    niS = buildstamps_result['niS']
+    kernel_vec = buildstamps_result['kernel_vec']
+    filter_x = buildstamps_result['filter_x']
+    filter_y = buildstamps_result['filter_y']
+
+    tMerit = 0.0
+    iMerit = 0.0
+    convTmpl = 0
+
+    sys.stderr.write("Filling Template sub-stamps\n")
+    if localForceConvolve != "i":
+        for k in range(ntS):
+            ctStamps[k]['sscnt'] = 0
+            fill_stamp_numpy(ctStamps[k], tRData1d, iRData1d,
+                             rPixX, rPixY, verbose, ngauss, deg_fixe,
+                             hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                             bgOrder, nCompKer, kerOrder, usePCA,
+                             filter_x, filter_y, PCA, fillVal, mRData1d)
+        if localForceConvolve == "b":
+            sys.stderr.write("\n\nTrying to convolve the TEMPLATE to fit IMAGE\n")
+            tMerit = check_stamps_numpy(
+                ctStamps, ntS, iRData1d, oRData1d,
+                nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
+                localForceConvolve, figMerit, kerSigReject, statSig,
+                fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
+                kernel_vec, mRData1d)
+            sys.stderr.write("    Result : merit = %.3f\n" % tMerit)
+        else:
+            tMerit = 0.0
+            iMerit = 0.0
+
+    sys.stderr.write("Filling Image sub-stamps\n")
+    if localForceConvolve != "t":
+        for k in range(niS):
+            ciStamps[k]['sscnt'] = 0
+            fill_stamp_numpy(ciStamps[k], iRData1d, tRData1d,
+                             rPixX, rPixY, verbose, ngauss, deg_fixe,
+                             hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                             bgOrder, nCompKer, kerOrder, usePCA,
+                             filter_x, filter_y, PCA, fillVal, mRData1d)
+        if localForceConvolve == "b":
+            sys.stderr.write("\n\nTrying to convolve the IMAGE to fit TEMPLATE \n")
+            iMerit = check_stamps_numpy(
+                ciStamps, niS, tRData1d, oRData1d,
+                nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
+                localForceConvolve, figMerit, kerSigReject, statSig,
+                fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
+                kernel_vec, mRData1d)
+            sys.stderr.write("    Result : merit = %.3f\n" % iMerit)
+        else:
+            iMerit = 0.0
+            tMerit = 0.0
+
+    if (localForceConvolve == "t") or \
+       ((tMerit < iMerit) and (localForceConvolve != "i")):
+        convTmpl = 1
+    else:
+        convTmpl = 0
+
+    return {
+        'convTmpl': convTmpl,
+        'tMerit': tMerit,
+        'iMerit': iMerit,
+        'ctStamps': ctStamps,
+        'ciStamps': ciStamps,
+    }
+
+
+def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
+                                ctx_info, params_info, region_idx, localForceConvolve):
+    import sys
+
+    nCompKer = ctx_info['nCompKer']
+    nBGVectors = ctx_info['nBGVectors']
+    nC = ctx_info['nC']
+    nStamps = ctx_info['nStamps']
+    fwKSStamp = ctx_info['fwKSStamp']
+    fwKernel = ctx_info['fwKernel']
+    kcStep = ctx_info['kcStep']
+
+    hwKernel = params_info['hwKernel']
+    ngauss = params_info['ngauss']
+    deg_fixe = params_info['deg_fixe']
+    kerOrder = params_info['kerOrder']
+    bgOrder = params_info['bgOrder']
+    hwKSStamp = params_info['hwKSStamp']
+    verbose = params_info.get('verbose', 0)
+    usePCA = params_info.get('usePCA', 0)
+    PCA = params_info.get('PCA', None)
+    statSig = params_info['statSig']
+    kerSigReject = params_info['kerSigReject']
+    kerFracMask = params_info['kerFracMask']
+    fillVal = params_info['fillVal']
+    fillValNoise = params_info['fillValNoise']
+    figMerit = params_info['figMerit']
+    tUThresh = params_info['tUThresh']
+    tLThresh = params_info['tLThresh']
+    tGain = params_info['tGain']
+    tRdnoise = params_info['tRdnoise']
+    iUThresh = params_info['iUThresh']
+    iLThresh = params_info['iLThresh']
+    iGain = params_info['iGain']
+    iRdnoise = params_info['iRdnoise']
+    convolveVariance = params_info.get('convolveVariance', 0)
+    sameConv = params_info.get('sameConv', 0)
+    savexyflag = params_info.get('savexyflag', 0)
+    tnoise_2d = params_info.get('tNoiseFullData', None)
+    inoise_2d = params_info.get('iNoiseFullData', None)
+
+    tRData = setup_result['tRData'].copy()
+    iRData = setup_result['iRData'].copy()
+    mRData = setup_result['mRData'].copy()
+    misRData = setup_result['misRData'].copy()
+    mtsRData = setup_result['mtsRData'].copy()
+    rXBMin = setup_result['rXBMin']
+    rYBMin = setup_result['rYBMin']
+    rXBMax = setup_result['rXBMax']
+    rYBMax = setup_result['rYBMax']
+    rPixX = setup_result['rPixX']
+    rPixY = setup_result['rPixY']
+    rXMin = setup_result['rXMin']
+    rYMin = setup_result['rYMin']
+    rXMax = setup_result['rXMax']
+    rYMax = setup_result['rYMax']
+
+    convTmpl = fit_result['convTmpl']
+    ctStamps = fit_result['ctStamps']
+    ciStamps = fit_result['ciStamps']
+
+    ntS = buildstamps_result['ntS']
+    niS = buildstamps_result['niS']
+    kernel_vec = buildstamps_result['kernel_vec']
+    filter_x = buildstamps_result['filter_x']
+    filter_y = buildstamps_result['filter_y']
+
+    kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
+    kernel = np.zeros(fwKernel * fwKernel, dtype=np.float64)
+
+    tRData1d = tRData.ravel()
+    iRData1d = iRData.ravel()
+    mRData1d = mRData.ravel()
+    misRData1d = misRData.ravel()
+    mtsRData1d = mtsRData.ravel()
+
+    meansigSubstamps = 0.0
+    scatterSubstamps = 0.0
+    NskippedSubstamps = 0
+    savexy_entries = []
+    sumKernel = 0.0
+    kerSol = None
+    nS = 0
+
+    if convTmpl:
+        sys.stderr.write("\n\n Region %d:%d,%d:%d : Convolving TEMPLATE\n" % (rXMin, rXMax, rYMin, rYMax))
+        nS = ntS
+
+        oRData1d = setup_result['oRData'].ravel().copy()
+        fit_result_k = fit_kernel_numpy(
+            ctStamps, iRData1d, tRData1d, oRData1d,
+            nCompKer, kerOrder, bgOrder, verbose, nS,
+            fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
+            kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
+            hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal)
+        tKerSol = fit_result_k['kernelSol']
+        meansigSubstamps = fit_result_k['meansigSubstamps']
+        scatterSubstamps = fit_result_k['scatterSubstamps']
+        NskippedSubstamps = fit_result_k['NskippedSubstamps']
+        ctStamps = fit_result_k['stamps']
+        kerSol = tKerSol
+
+        oRData1d = np.full(rPixX * rPixY, fillVal, dtype=np.float32)
+
+        for idx in range(rPixX * rPixY):
+            mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(tRData1d[idx] == fillVal)
+            mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(tRData1d[idx] >= tUThresh)
+            mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(tRData1d[idx] <= tLThresh)
+
+        mRData1d[:] = 0
+
+        eRData1d = np.full(rPixX * rPixY, fillValNoise, dtype=np.float32)
+        if tnoise_2d is not None:
+            eRData1d[:] = tnoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
+            eRData1d[:] = eRData1d * eRData1d
+        else:
+            eRData1d = make_noise_image4_numpy(tRData1d, 1.0 / tGain, tRdnoise / tGain, rPixX, rPixY)
+
+        sys.stderr.write("\n Convolving...\n")
+        vData = spatial_convolve_numpy(
+            tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
+            kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
+            convolveVariance, kerFracMask, mRData1d,
+            rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+        if vData is not None:
+            eRData1d = vData
+
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                oRData1d[k + rPixX * l] += get_background_numpy(
+                    k, l, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+
+        sumKernel = make_kernel_numpy(rXMin, rYMin, tKerSol, rPixX, rPixY,
+                                      nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMin, rYMin, sumKernel))
+        sumKernel = make_kernel_numpy(rXMax, rYMax, tKerSol, rPixX, rPixY,
+                                      nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMax, rYMax, sumKernel))
+        sumKernel = make_kernel_numpy(rPixX // 2, rPixY // 2, tKerSol, rPixX, rPixY,
+                                      nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        sys.stderr.write(" Using Kernel Sum = %f\n\n" % sumKernel)
+
+        tRData1d[:] = fillValNoise
+        if inoise_2d is not None:
+            tRData1d[:] = inoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
+            tRData1d[:] = tRData1d * tRData1d
+        else:
+            tRData1d = make_noise_image4_numpy(iRData1d, 1.0 / iGain, iRdnoise / iGain, rPixX, rPixY)
+
+        for idx in range(rPixX * rPixY):
+            tRData1d[idx] = math.sqrt(float(tRData1d[idx]) + float(eRData1d[idx]))
+
+        for idx in range(rPixX * rPixY):
+            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(iRData1d[idx] == fillVal)
+            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(iRData1d[idx] >= iUThresh)
+            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(iRData1d[idx] <= iLThresh)
+            mRData1d[idx] |= misRData1d[idx]
+            mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((misRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
+
+        if savexyflag:
+            for si in range(ntS):
+                for sc in range(ctStamps[si]['nss']):
+                    entry = {
+                        'x': int(ctStamps[si]['xss'][sc]),
+                        'y': int(ctStamps[si]['yss'][sc]),
+                    }
+                    if sc == ctStamps[si]['sscnt']:
+                        entry['isUsed'] = 1
+                    elif sc < ctStamps[si]['sscnt']:
+                        entry['isUsed'] = -1
+                    else:
+                        entry['isUsed'] = 0
+                    savexy_entries.append(entry)
+
+        if sameConv:
+            localForceConvolve = "t"
+            ciStamps = None
+
+    else:
+        sys.stderr.write("\n\n Region %d,%d %d,%d : Convolving IMAGE\n" % (rXMin, rXMax, rYMin, rYMax))
+        nS = niS
+
+        oRData1d = setup_result['oRData'].ravel().copy()
+        fit_result_k = fit_kernel_numpy(
+            ciStamps, tRData1d, iRData1d, oRData1d,
+            nCompKer, kerOrder, bgOrder, verbose, nS,
+            fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
+            kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
+            hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal)
+        iKerSol = fit_result_k['kernelSol']
+        meansigSubstamps = fit_result_k['meansigSubstamps']
+        scatterSubstamps = fit_result_k['scatterSubstamps']
+        NskippedSubstamps = fit_result_k['NskippedSubstamps']
+        ciStamps = fit_result_k['stamps']
+        kerSol = iKerSol
+
+        oRData1d = np.full(rPixX * rPixY, fillVal, dtype=np.float32)
+
+        for idx in range(rPixX * rPixY):
+            misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(iRData1d[idx] == fillVal)
+            misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(iRData1d[idx] >= iUThresh)
+            misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(iRData1d[idx] <= iLThresh)
+
+        mRData1d[:] = 0
+
+        eRData1d = np.full(rPixX * rPixY, fillValNoise, dtype=np.float32)
+        if inoise_2d is not None:
+            eRData1d[:] = inoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
+            eRData1d[:] = eRData1d * eRData1d
+        else:
+            eRData1d = make_noise_image4_numpy(iRData1d, 1.0 / iGain, iRdnoise / iGain, rPixX, rPixY)
+
+        sys.stderr.write("\n Convolving...\n")
+        vData = spatial_convolve_numpy(
+            iRData1d, eRData1d, rPixX, rPixY, iKerSol, oRData1d, misRData1d,
+            kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
+            convolveVariance, kerFracMask, mRData1d,
+            rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+        if vData is not None:
+            eRData1d = vData
+
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                oRData1d[k + rPixX * l] += get_background_numpy(
+                    k, l, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+
+        sumKernel = make_kernel_numpy(rXMin, rYMin, iKerSol, rPixX, rPixY,
+                                      nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMin, rYMin, sumKernel))
+        sumKernel = make_kernel_numpy(rXMax, rYMax, iKerSol, rPixX, rPixY,
+                                      nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMax, rYMax, sumKernel))
+        sumKernel = make_kernel_numpy(rPixX // 2, rPixY // 2, iKerSol, rPixX, rPixY,
+                                      nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        sys.stderr.write(" Using Kernel Sum = %f\n\n" % sumKernel)
+
+        iRData1d[:] = fillValNoise
+        if tnoise_2d is not None:
+            iRData1d[:] = tnoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
+            iRData1d[:] = iRData1d * iRData1d
+        else:
+            iRData1d = make_noise_image4_numpy(tRData1d, 1.0 / tGain, tRdnoise / tGain, rPixX, rPixY)
+
+        for idx in range(rPixX * rPixY):
+            iRData1d[idx] = math.sqrt(float(iRData1d[idx]) + float(eRData1d[idx]))
+
+        for idx in range(rPixX * rPixY):
+            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(tRData1d[idx] == fillVal)
+            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(tRData1d[idx] >= tUThresh)
+            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(tRData1d[idx] <= tLThresh)
+            mRData1d[idx] |= mtsRData1d[idx]
+            mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((mtsRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
+
+        if savexyflag:
+            for si in range(niS):
+                for sc in range(ciStamps[si]['nss']):
+                    entry = {
+                        'x': int(ciStamps[si]['xss'][sc]),
+                        'y': int(ciStamps[si]['yss'][sc]),
+                    }
+                    if sc == ciStamps[si]['sscnt']:
+                        entry['isUsed'] = 1
+                    elif sc < ciStamps[si]['sscnt']:
+                        entry['isUsed'] = -1
+                    else:
+                        entry['isUsed'] = 0
+                    savexy_entries.append(entry)
+
+        if sameConv:
+            localForceConvolve = "i"
+            ctStamps = None
+
+    noiseData1d = tRData1d if convTmpl else iRData1d
+
+    return {
+        'oRData': oRData1d.reshape(rPixY, rPixX),
+        'noiseData': noiseData1d.reshape(rPixY, rPixX),
+        'mRData': mRData1d.reshape(rPixY, rPixX),
+        'sumKernel': sumKernel,
+        'meansigSubstamps': meansigSubstamps,
+        'scatterSubstamps': scatterSubstamps,
+        'NskippedSubstamps': NskippedSubstamps,
+        'convTmpl': convTmpl,
+        'nS': nS,
+        'localForceConvolve': localForceConvolve,
+        'kerSol': kerSol,
+        'savexy_entries': savexy_entries,
+        'savexyXmin': rXBMin + (0 if convTmpl else 1),
+        'savexyYmin': rYBMin + (0 if convTmpl else 1),
+        'ctStamps': ctStamps,
+        'ciStamps': ciStamps,
+        'tRData': tRData1d.reshape(rPixY, rPixX),
+        'iRData': iRData1d.reshape(rPixY, rPixX),
+    }
+
+
+def region_output_numpy(convolve_result, setup_result, fit_result,
+                         diff_out, noise_out, conv_out, mask_out,
+                         ctx_info, params_info, region_idx, stats_list):
+    import sys
+
+    nCompKer = ctx_info['nCompKer']
+    nBGVectors = ctx_info['nBGVectors']
+    nC = ctx_info['nC']
+    nStamps = ctx_info['nStamps']
+    fwKSStamp = ctx_info['fwKSStamp']
+    fwKernel = ctx_info['fwKernel']
+
+    hwKernel = params_info['hwKernel']
+    kerOrder = params_info['kerOrder']
+    bgOrder = params_info['bgOrder']
+    hwKSStamp = params_info['hwKSStamp']
+    verbose = params_info.get('verbose', 0)
+    statSig = params_info['statSig']
+    fillVal = params_info['fillVal']
+    fillValNoise = params_info['fillValNoise']
+    photNormalize = params_info['photNormalize']
+    figMerit = params_info['figMerit']
+    rescaleOK = params_info.get('rescaleOK', 0)
+    kfSpreadMask2 = params_info.get('kfSpreadMask2', -1.0)
+
+    rPixX = setup_result['rPixX']
+    rPixY = setup_result['rPixY']
+    rXMin = setup_result['rXMin']
+    rYMin = setup_result['rYMin']
+    rXMax = setup_result['rXMax']
+    rYMax = setup_result['rYMax']
+    xBufLo = setup_result['xBufLo']
+    yBufLo = setup_result['yBufLo']
+    xBufHi = setup_result['xBufHi']
+    yBufHi = setup_result['yBufHi']
+    fpixelOutX = setup_result['fpixelOutX']
+    fpixelOutY = setup_result['fpixelOutY']
+    lpixelOutX = setup_result['lpixelOutX']
+    lpixelOutY = setup_result['lpixelOutY']
+    rXBMin = setup_result['rXBMin']
+    rYBMin = setup_result['rYBMin']
+
+    convTmpl = convolve_result['convTmpl']
+    nS = convolve_result['nS']
+    sumKernel = convolve_result['sumKernel']
+    meansigSubstamps = convolve_result['meansigSubstamps']
+    scatterSubstamps = convolve_result['scatterSubstamps']
+    NskippedSubstamps = convolve_result['NskippedSubstamps']
+
+    oRData = convolve_result['oRData'].copy()
+    noiseData = convolve_result['noiseData'].copy()
+    mRData = convolve_result['mRData'].copy()
+    tRData = convolve_result['tRData']
+    iRData = convolve_result['iRData']
+    ctStamps = convolve_result.get('ctStamps')
+    ciStamps = convolve_result.get('ciStamps')
+
+    oRData1d = oRData.ravel()
+    noiseData1d = noiseData.ravel()
+    mRData1d = mRData.ravel()
+    tRData1d = tRData.ravel()
+    iRData1d = iRData.ravel()
+
+    for l in range(rPixY):
+        for k in range(hwKernel):
+            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
+        for k in range(rPixX - hwKernel, rPixX):
+            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
+    for l in range(hwKernel):
+        for k in range(hwKernel, rPixX - hwKernel):
+            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
+    for l in range(rPixY - hwKernel, rPixY):
+        for k in range(hwKernel, rPixX - hwKernel):
+            mRData1d[k + rPixX * l] |= FLAG_OUTPUT_ISBAD
+
+    sys.stderr.write(" Creating and writing output images...\n")
+
+    inv1 = 1.0 / sumKernel
+
+    if conv_out is not None:
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                if (photNormalize[0:1] != "u") and \
+                   ((convTmpl and photNormalize[0:1] == "t") or
+                    (not convTmpl and photNormalize[0:1] == "i")):
+                    oRData1d[k + rPixX * l] *= inv1
+
+        insert_subregion_flt_numpy(
+            oRData, conv_out, fpixelOutX, fpixelOutY,
+            lpixelOutX, lpixelOutY, xBufLo, yBufLo)
+
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                if (photNormalize[0:1] != "u") and \
+                   ((convTmpl and photNormalize[0:1] == "t") or
+                    (not convTmpl and photNormalize[0:1] == "i")):
+                    oRData1d[k + rPixX * l] *= sumKernel
+
+    meansigSubstampsF = 0.0
+    scatterSubstampsF = 0.0
+
+    if convTmpl:
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                m = k + rPixX * l
+                oRData1d[m] -= iRData1d[m]
+                if (photNormalize[0:1] != "u") and (photNormalize[0:1] == "t"):
+                    oRData1d[m] *= inv1
+                    noiseData1d[m] *= inv1
+                oRData1d[m] *= -1.0
+
+        if figMerit[0:1] == "v":
+            temp2 = np.zeros(nS, dtype=np.float32)
+            kk = 0
+            for l in range(nS):
+                if ctStamps[l]['sscnt'] < ctStamps[l]['nss']:
+                    sig = get_final_stamp_sig_numpy(
+                        ctStamps[l], oRData1d, noiseData1d,
+                        fwKSStamp, hwKSStamp, rPixX, mRData1d)
+                    temp2[kk] = sig
+                    kk += 1
+            mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
+            meansigSubstampsF = mean_f
+            scatterSubstampsF = stdev_f
+            sys.stderr.write("   FINAL Mean sig: %6.3f stdev: %6.3f\n" % (meansigSubstampsF, scatterSubstampsF))
+
+    else:
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                m = k + rPixX * l
+                oRData1d[m] -= tRData1d[m]
+                if (photNormalize[0:1] != "u") and (photNormalize[0:1] == "i"):
+                    oRData1d[m] *= inv1
+                    noiseData1d[m] *= inv1
+
+        if figMerit[0:1] == "v":
+            temp2 = np.zeros(nS, dtype=np.float32)
+            kk = 0
+            for l in range(nS):
+                if ciStamps[l]['sscnt'] < ciStamps[l]['nss']:
+                    sig = get_final_stamp_sig_numpy(
+                        ciStamps[l], oRData1d, noiseData1d,
+                        fwKSStamp, hwKSStamp, rPixX, mRData1d)
+                    temp2[kk] = sig
+                    kk += 1
+            mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
+            meansigSubstampsF = mean_f
+            scatterSubstampsF = stdev_f
+            sys.stderr.write("    FINAL Mean sig: %6.3f stdev: %6.3f\n" % (meansigSubstampsF, scatterSubstampsF))
+
+    oRData_2d = oRData1d.reshape(rPixY, rPixX)
+    noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
+    mRData_2d = mRData1d.reshape(rPixY, rPixX)
+
+    sys.stderr.write(" Getting diffim stats for GOOD pixels : \n")
+    res_good = get_stamp_stats3_numpy(
+        oRData_2d, 0, 0, rPixX, rPixY,
+        0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
+    mean_val = res_good['mean']
+    sd_val = res_good['sd']
+    sys.stderr.write("   Mean   : %.2f\n" % res_good['mean'])
+    sys.stderr.write("   Median : %.2f\n" % res_good['median'])
+    sys.stderr.write("   Mode   : %.2f\n" % res_good['mode'])
+    sys.stderr.write("   Stdev  : %.2f\n" % res_good['sd'])
+
+    sys.stderr.write(" Getting noiseim stats for GOOD pixels : \n")
+    nres_good = get_stamp_stats3_numpy(
+        noiseData_2d, 0, 0, rPixX, rPixY,
+        0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
+    nmean_val = nres_good['mean']
+
+    x2norm, nx2norm = get_noise_stats3_numpy(
+        oRData1d, noiseData1d, 0x0, 0xffff, rPixX, rPixY, mRData1d)
+
+    sys.stderr.write("   Mean   : %.2f\n" % nres_good['mean'])
+    sys.stderr.write("   Median : %.2f\n" % nres_good['median'])
+    sys.stderr.write("   Mode   : %.2f\n" % nres_good['mode'])
+    sys.stderr.write("   Stdev  : %.2f\n" % nres_good['sd'])
+    sys.stderr.write(" Emperical / Expected Noise for GOOD pixels = %.2f\n" % (sd_val / nmean_val if nmean_val != 0 else 0.0))
+    sys.stderr.write(" X2NORM = %.2f\n\n" % x2norm)
+
+    diffrat = sd_val / nmean_val if nmean_val != 0 else 0.0
+
+    sys.stderr.write(" Getting diffim stats for OK pixels : \n")
+    res_ok = get_stamp_stats3_numpy(
+        oRData_2d, 0, 0, rPixX, rPixY,
+        0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
+    meanm_val = res_ok['mean']
+    sdm_val = res_ok['sd']
+    sys.stderr.write("   Mean   : %.2f\n" % res_ok['mean'])
+    sys.stderr.write("   Median : %.2f\n" % res_ok['median'])
+    sys.stderr.write("   Mode   : %.2f\n" % res_ok['mode'])
+    sys.stderr.write("   Stdev  : %.2f\n" % res_ok['sd'])
+
+    sys.stderr.write(" Getting noiseim stats for OK pixels : \n")
+    nres_ok = get_stamp_stats3_numpy(
+        noiseData_2d, 0, 0, rPixX, rPixY,
+        0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
+    nmeanm_val = nres_ok['mean']
+    sys.stderr.write("   Mean   : %.2f\n" % nres_ok['mean'])
+    sys.stderr.write("   Median : %.2f\n" % nres_ok['median'])
+    sys.stderr.write("   Mode   : %.2f\n" % nres_ok['mode'])
+    sys.stderr.write("   Stdev  : %.2f\n" % nres_ok['sd'])
+
+    sys.stderr.write(" Emperical / Expected Noise for OK pixels = %.2f\n\n" % (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0))
+
+    if rescaleOK:
+        if diffrat != 0:
+            diffrat = (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0) / diffrat
+        if diffrat > 1:
+            sys.stderr.write(" Scale OK pixel noise by = %.2f\n" % diffrat)
+            for idx in range(rPixX * rPixY):
+                if (mRData1d[idx] & 0xff) and not (mRData1d[idx] & FLAG_OUTPUT_ISBAD):
+                    noiseData1d[idx] *= diffrat
+        else:
+            sys.stderr.write(" Leave OK pixel noise as-is\n")
+
+    if kfSpreadMask2 >= 0:
+        for l in range(hwKernel, rPixY - hwKernel):
+            for k in range(hwKernel, rPixX - hwKernel):
+                if mRData1d[k + rPixX * l] & FLAG_OUTPUT_ISBAD:
+                    oRData1d[k + rPixX * l] = fillVal
+                    noiseData1d[k + rPixX * l] = fillValNoise
+
+    oRData_2d = oRData1d.reshape(rPixY, rPixX)
+    noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
+    mRData_2d = mRData1d.reshape(rPixY, rPixX)
+
+    insert_subregion_flt_numpy(
+        oRData_2d, diff_out, fpixelOutX, fpixelOutY,
+        lpixelOutX, lpixelOutY, xBufLo, yBufLo)
+
+    if noise_out is not None:
+        insert_subregion_flt_numpy(
+            noiseData_2d, noise_out, fpixelOutX, fpixelOutY,
+            lpixelOutX, lpixelOutY, xBufLo, yBufLo)
+
+    if mask_out is not None:
+        insert_subregion_int_numpy(
+            mRData_2d, mask_out, fpixelOutX, fpixelOutY,
+            lpixelOutX, lpixelOutY, xBufLo, yBufLo)
+
+    kerSol = convolve_result['kerSol']
+
+    stats = {
+        'convTmpl': convTmpl,
+        'sumKernel': sumKernel,
+        'meansigSubstamps': meansigSubstamps,
+        'scatterSubstamps': scatterSubstamps,
+        'meansigSubstampsF': meansigSubstampsF,
+        'scatterSubstampsF': scatterSubstampsF,
+        'x2norm': x2norm,
+        'nx2norm': nx2norm,
+        'mean': mean_val,
+        'sd': sd_val,
+        'nmean': nmean_val,
+        'meanm': meanm_val,
+        'sdm': sdm_val,
+        'nmeanm': nmeanm_val,
+        'diffrat': diffrat,
+        'kerSol': kerSol,
+    }
+
+    if stats_list is not None and region_idx < len(stats_list):
+        stats_list[region_idx] = stats
+
+    sys.stderr.write("Region %i finished\n\n" % region_idx)
+
+    return stats

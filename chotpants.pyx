@@ -473,7 +473,7 @@ def hotpants(
     cdef np.ndarray[float, ndim=2, mode="c"] conv_out = np.full((oNy, oNx), <float>fi, dtype=np.float32)
     cdef np.ndarray[int, ndim=2, mode="c"] mask_out = np.zeros((oNy, oNx), dtype=np.int32)
 
-    cdef region_stats *stats = <region_stats *>calloc(nR, sizeof(region_stats))
+    # cdef region_stats *stats = <region_stats *>calloc(nR, sizeof(region_stats))
 
     if dump_dir is not None:
         os.makedirs(dump_dir, exist_ok=True)
@@ -540,49 +540,91 @@ def hotpants(
                   <int>ko, <int>bgo, <int>nsx, <int>nsy, <int>nss, <int>rss,
                   <int>uss, <float>ft, <int>kcs, tNx, tNy, iNx, iNy, nR)
 
-    cdef hotpants_params prm
-    memset(&prm, 0, sizeof(hotpants_params))
-    prm.tFullData = &tmpl_arr[0, 0]; prm.tNx = tNx; prm.tNy = tNy
-    prm.iFullData = &sci_arr[0, 0]; prm.iNx = iNx; prm.iNy = iNy
-    prm.tNoiseFullData = tni_ptr; prm.iNoiseFullData = ini_ptr
-    prm.tMaskFullData = tmi_ptr; prm.iMaskFullData = imi_ptr
-    prm.nR = nR
-    prm.rXMins = &rxmins[0]; prm.rXMaxs = &rxmaxs[0]
-    prm.rYMins = &rymins[0]; prm.rYMaxs = &rymaxs[0]
-    prm.hwKernel = <int>r; prm.ngauss = <int>ng
-    prm.deg_fixe = &deg_arr[0]; prm.sigma_gauss = &sig_arr[0]
-    prm.kerOrder = <int>ko; prm.bgOrder = <int>bgo
-    prm.findSSC = <int>afssc
-    prm.hwKSStamp = <int>rss; prm.nKSStamps = <int>nss
-    prm.kerFitThresh = <float>ft; prm.scaleFitThresh = <float>sft
-    prm.minFracGoodStamps = <float>nft
-    prm.statSig = <float>ssig; prm.kerSigReject = <float>ks; prm.kerFracMask = <float>kfm
-    prm.tUThresh = <float>tu; prm.tLThresh = <float>tl
-    prm.tGain = <float>tg; prm.tRdnoise = <float>tr; prm.tPedestal = <float>tp
-    prm.iUThresh = <float>iu; prm.iLThresh = <float>il
-    prm.iGain = <float>ig; prm.iRdnoise = <float>ir; prm.iPedestal = <float>ip
-    prm.tUKThresh = tuk_val; prm.iUKThresh = iuk_val
-    prm.kfSpreadMask1 = <float>mins; prm.kfSpreadMask2 = <float>mous
-    prm.fillVal = <float>fi; prm.fillValNoise = <float>fin
-    prm.forceConvolve = c_str; prm.photNormalize = n_str; prm.figMerit = fom_str
-    prm.sameConv = <int>sconv; prm.rescaleOK = <int>okn; prm.convolveVariance = <int>convvar
-    prm.usePCA = use_pca; prm.PCA = pca_ptr
-    prm.xcmp = xcmp_ptr; prm.ycmp = ycmp_ptr; prm.Ncmp = ncmp
-    prm.verbose = <int>v
-    prm.savexyflag = <int>savexy
-    prm.diffOut = &diff_out[0, 0]; prm.noiseOut = &noise_out[0, 0]
-    prm.convOut = &conv_out[0, 0]; prm.maskOut = &mask_out[0, 0]
-    prm.oNx = oNx; prm.oNy = oNy
-    prm.stats = stats
+    # cdef hotpants_params prm
+    # memset(&prm, 0, sizeof(hotpants_params))
+    # prm.tFullData = &tmpl_arr[0, 0]; prm.tNx = tNx; prm.tNy = tNy
+    # prm.iFullData = &sci_arr[0, 0]; prm.iNx = iNx; prm.iNy = iNy
+    # prm.tNoiseFullData = tni_ptr; prm.iNoiseFullData = ini_ptr
+    # prm.tMaskFullData = tmi_ptr; prm.iMaskFullData = imi_ptr
+    # prm.nR = nR
+    # prm.rXMins = &rxmins[0]; prm.rXMaxs = &rxmaxs[0]
+    # prm.rYMins = &rymins[0]; prm.rYMaxs = &rymaxs[0]
+    # prm.hwKernel = <int>r; prm.ngauss = <int>ng
+    # prm.deg_fixe = &deg_arr[0]; prm.sigma_gauss = &sig_arr[0]
+    # prm.kerOrder = <int>ko; prm.bgOrder = <int>bgo
+    # prm.findSSC = <int>afssc
+    # prm.hwKSStamp = <int>rss; prm.nKSStamps = <int>nss
+    # prm.kerFitThresh = <float>ft; prm.scaleFitThresh = <float>sft
+    # prm.minFracGoodStamps = <float>nft
+    # prm.statSig = <float>ssig; prm.kerSigReject = <float>ks; prm.kerFracMask = <float>kfm
+    # prm.tUThresh = <float>tu; prm.tLThresh = <float>tl
+    # prm.tGain = <float>tg; prm.tRdnoise = <float>tr; prm.tPedestal = <float>tp
+    # prm.iUThresh = <float>iu; prm.iLThresh = <float>il
+    # prm.iGain = <float>ig; prm.iRdnoise = <float>ir; prm.iPedestal = <float>ip
+    # prm.tUKThresh = tuk_val; prm.iUKThresh = iuk_val
+    # prm.kfSpreadMask1 = <float>mins; prm.kfSpreadMask2 = <float>mous
+    # prm.fillVal = <float>fi; prm.fillValNoise = <float>fin
+    # prm.forceConvolve = c_str; prm.photNormalize = n_str; prm.figMerit = fom_str
+    # prm.sameConv = <int>sconv; prm.rescaleOK = <int>okn; prm.convolveVariance = <int>convvar
+    # prm.usePCA = use_pca; prm.PCA = pca_ptr
+    # prm.xcmp = xcmp_ptr; prm.ycmp = ycmp_ptr; prm.Ncmp = ncmp
+    # prm.verbose = <int>v
+    # prm.savexyflag = <int>savexy
+    # prm.diffOut = &diff_out[0, 0]; prm.noiseOut = &noise_out[0, 0]
+    # prm.convOut = &conv_out[0, 0]; prm.maskOut = &mask_out[0, 0]
+    # prm.oNx = oNx; prm.oNy = oNy
+    # prm.stats = stats
 
-    cdef char *localFC = c_str
+    from pyhotpants.numutils import (region_buildstamps_numpy, region_fit_numpy,
+                                      region_convolve_diff_numpy, region_output_numpy)
+
+    ctx_info = {
+        'nCompKer': ctx.nCompKer, 'nComp': ctx.nComp, 'nC': ctx.nC,
+        'nCompBG': ctx.nCompBG, 'nBGVectors': ctx.nBGVectors, 'nCompTotal': ctx.nCompTotal,
+        'fwKernel': ctx.fwKernel, 'fwStamp': ctx.fwStamp, 'fwKSStamp': ctx.fwKSStamp,
+        'sBorder': ctx.sBorder, 'nStamps': ctx.nStamps,
+        'nStampX': ctx.nStampX, 'nStampY': ctx.nStampY,
+        'xMin': ctx.xMin, 'yMin': ctx.yMin, 'xMax': ctx.xMax, 'yMax': ctx.yMax,
+        'fitThresh': ctx.fitThresh, 'kcStep': ctx.kcStep,
+    }
+
+    params_info = {
+        'hwKernel': int(r), 'ngauss': int(ng),
+        'deg_fixe': deg_arr, 'sigma_gauss': sig_arr,
+        'kerOrder': int(ko), 'bgOrder': int(bgo),
+        'hwKSStamp': int(rss), 'nKSStamps': int(nss),
+        'scaleFitThresh': float(sft), 'minFracGoodStamps': float(nft),
+        'tUKThresh': float(tuk_val), 'iUKThresh': float(iuk_val),
+        'tUThresh': float(tu), 'tLThresh': float(tl),
+        'tGain': float(tg), 'tRdnoise': float(tr),
+        'iUThresh': float(iu), 'iLThresh': float(il),
+        'iGain': float(ig), 'iRdnoise': float(ir),
+        'verbose': int(v), 'usePCA': int(use_pca),
+        'PCA': pca_arrs if use_pca else None,
+        'xcmp': np.asarray(xcmp_arr) if ssf is not None else None,
+        'ycmp': np.asarray(ycmp_arr) if ssf is not None else None,
+        'Ncmp': ncmp,
+        'statSig': float(ssig), 'kerSigReject': float(ks), 'kerFracMask': float(kfm),
+        'fillVal': float(fi), 'fillValNoise': float(fin),
+        'figMerit': fom, 'photNormalize': n,
+        'convolveVariance': int(convvar), 'sameConv': int(sconv),
+        'savexyflag': int(savexy), 'rescaleOK': int(okn),
+        'kfSpreadMask2': float(mous), 'findSSC': int(afssc),
+        'tNoiseFullData': tni_arr if tni is not None else None,
+        'iNoiseFullData': ini_arr if ini is not None else None,
+    }
+
+    localFC_py = c
+    stats_list_py = [None] * nR
+
+    # cdef char *localFC = c_str
     cdef int ri
-    cdef region_state rs_tmp
-    cdef int bs_ret
-    cdef int npix
-    cdef region_state rs_c
+    # cdef region_state rs_tmp
+    # cdef int bs_ret
+    # cdef int npix
+    # cdef region_state rs_c
     for ri in range(nR):
-        memset(&rs_tmp, 0, sizeof(region_state))
+        # memset(&rs_tmp, 0, sizeof(region_state))
 
         # ========== [旧代码 注释掉] region_setup C 主路径 + numpy 影子 ==========
         # region_setup(&ctx, &prm, ri, &rs_tmp)
@@ -634,6 +676,8 @@ def hotpants(
         # ========== [旧代码 结束] ==========
 
         # ========== numpy 主路径 ==========
+        import time as tm
+        t0 = tm.time()
         py = region_setup_numpy(
             tmpl_arr, sci_arr,
             tni_arr if tni is not None else None,
@@ -649,86 +693,117 @@ def hotpants(
             tg, tr, ig, ir,
             tu, tl, iu, il,
             mins)
+        import sys as tsys
+        tsys.stderr.write(f"  [{ri}] setup: {tm.time()-t0:.3f}s\n"); tsys.stderr.flush()
 
-        npix = py['rPixX'] * py['rPixY']
-        rs_tmp.tRData = <float*>malloc(npix * sizeof(float))
-        np.asarray(<float[:npix]>rs_tmp.tRData)[:] = py['tRData'].ravel()
-        rs_tmp.iRData = <float*>malloc(npix * sizeof(float))
-        np.asarray(<float[:npix]>rs_tmp.iRData)[:] = py['iRData'].ravel()
-        rs_tmp.oRData = <float*>malloc(npix * sizeof(float))
-        np.asarray(<float[:npix]>rs_tmp.oRData)[:] = py['oRData'].ravel()
-        rs_tmp.eRData = <float*>malloc(npix * sizeof(float))
-        np.asarray(<float[:npix]>rs_tmp.eRData)[:] = py['eRData'].ravel()
-        rs_tmp.mRData = <int*>malloc(npix * sizeof(int))
-        np.asarray(<int[:npix]>rs_tmp.mRData)[:] = py['mRData'].ravel()
-        rs_tmp.misRData = <int*>malloc(npix * sizeof(int))
-        np.asarray(<int[:npix]>rs_tmp.misRData)[:] = py['misRData'].ravel()
-        rs_tmp.mtsRData = <int*>malloc(npix * sizeof(int))
-        np.asarray(<int[:npix]>rs_tmp.mtsRData)[:] = py['mtsRData'].ravel()
+        # ========== [注释掉] malloc+memcpy 填充 rs_tmp ==========
+        # npix = py['rPixX'] * py['rPixY']
+        # rs_tmp.tRData = <float*>malloc(npix * sizeof(float))
+        # np.asarray(<float[:npix]>rs_tmp.tRData)[:] = py['tRData'].ravel()
+        # rs_tmp.iRData = <float*>malloc(npix * sizeof(float))
+        # np.asarray(<float[:npix]>rs_tmp.iRData)[:] = py['iRData'].ravel()
+        # rs_tmp.oRData = <float*>malloc(npix * sizeof(float))
+        # np.asarray(<float[:npix]>rs_tmp.oRData)[:] = py['oRData'].ravel()
+        # rs_tmp.eRData = <float*>malloc(npix * sizeof(float))
+        # np.asarray(<float[:npix]>rs_tmp.eRData)[:] = py['eRData'].ravel()
+        # rs_tmp.mRData = <int*>malloc(npix * sizeof(int))
+        # np.asarray(<int[:npix]>rs_tmp.mRData)[:] = py['mRData'].ravel()
+        # rs_tmp.misRData = <int*>malloc(npix * sizeof(int))
+        # np.asarray(<int[:npix]>rs_tmp.misRData)[:] = py['misRData'].ravel()
+        # rs_tmp.mtsRData = <int*>malloc(npix * sizeof(int))
+        # np.asarray(<int[:npix]>rs_tmp.mtsRData)[:] = py['mtsRData'].ravel()
+        #
+        # if strncmp(localFC, b"i", 1) != 0:
+        #     rs_tmp.ctStamps = <stamp_struct*>calloc(ctx.nStamps, sizeof(stamp_struct))
+        #     allocateStamps(rs_tmp.ctStamps, ctx.nStamps, prm.bgOrder, ctx.nCompKer, ctx.fwKSStamp, ctx.nC, prm.nKSStamps)
+        #     rs_tmp.tKerSol = <double*>calloc(ctx.nCompTotal + 1, sizeof(double))
+        # if strncmp(localFC, b"t", 1) != 0:
+        #     rs_tmp.ciStamps = <stamp_struct*>calloc(ctx.nStamps, sizeof(stamp_struct))
+        #     allocateStamps(rs_tmp.ciStamps, ctx.nStamps, prm.bgOrder, ctx.nCompKer, ctx.fwKSStamp, ctx.nC, prm.nKSStamps)
+        #     rs_tmp.iKerSol = <double*>calloc(ctx.nCompTotal + 1, sizeof(double))
+        #
+        # rs_tmp.rXMin = py['rXMin']; rs_tmp.rYMin = py['rYMin']
+        # rs_tmp.rXMax = py['rXMax']; rs_tmp.rYMax = py['rYMax']
+        # rs_tmp.rXBMin = py['rXBMin']; rs_tmp.rYBMin = py['rYBMin']
+        # rs_tmp.rXBMax = py['rXBMax']; rs_tmp.rYBMax = py['rYBMax']
+        # rs_tmp.xBufLo = py['xBufLo']; rs_tmp.xBufHi = py['xBufHi']
+        # rs_tmp.yBufLo = py['yBufLo']; rs_tmp.yBufHi = py['yBufHi']
+        # rs_tmp.fpixelOutX = py['fpixelOutX']; rs_tmp.fpixelOutY = py['fpixelOutY']
+        # rs_tmp.lpixelOutX = py['lpixelOutX']; rs_tmp.lpixelOutY = py['lpixelOutY']
+        # rs_tmp.rPixX = py['rPixX']; rs_tmp.rPixY = py['rPixY']
+        # rs_tmp.meansigSubstamps = 0.0; rs_tmp.scatterSubstamps = 0.0
+        # rs_tmp.NskippedSubstamps = 0
+        # ========== [注释掉 结束] ==========
 
-        if strncmp(localFC, b"i", 1) != 0:
-            rs_tmp.ctStamps = <stamp_struct*>calloc(ctx.nStamps, sizeof(stamp_struct))
-            allocateStamps(rs_tmp.ctStamps, ctx.nStamps, prm.bgOrder, ctx.nCompKer, ctx.fwKSStamp, ctx.nC, prm.nKSStamps)
-            rs_tmp.tKerSol = <double*>calloc(ctx.nCompTotal + 1, sizeof(double))
-        if strncmp(localFC, b"t", 1) != 0:
-            rs_tmp.ciStamps = <stamp_struct*>calloc(ctx.nStamps, sizeof(stamp_struct))
-            allocateStamps(rs_tmp.ciStamps, ctx.nStamps, prm.bgOrder, ctx.nCompKer, ctx.fwKSStamp, ctx.nC, prm.nKSStamps)
-            rs_tmp.iKerSol = <double*>calloc(ctx.nCompTotal + 1, sizeof(double))
+        # ========== [注释掉] C 影子验证 region_setup ==========
+        # memset(&rs_c, 0, sizeof(region_state))
+        # region_setup(&ctx, &prm, ri, &rs_c)
+        #
+        # import sys
+        # shadow_pairs = [
+        #     ('tRData', np.asarray(<float[:npix]>rs_tmp.tRData).copy(), np.asarray(<float[:npix]>rs_c.tRData).copy()),
+        #     ('iRData', np.asarray(<float[:npix]>rs_tmp.iRData).copy(), np.asarray(<float[:npix]>rs_c.iRData).copy()),
+        #     ('oRData', np.asarray(<float[:npix]>rs_tmp.oRData).copy(), np.asarray(<float[:npix]>rs_c.oRData).copy()),
+        #     ('eRData', np.asarray(<float[:npix]>rs_tmp.eRData).copy(), np.asarray(<float[:npix]>rs_c.eRData).copy()),
+        #     ('mRData', np.asarray(<int[:npix]>rs_tmp.mRData).copy(), np.asarray(<int[:npix]>rs_c.mRData).copy()),
+        #     ('misRData', np.asarray(<int[:npix]>rs_tmp.misRData).copy(), np.asarray(<int[:npix]>rs_c.misRData).copy()),
+        #     ('mtsRData', np.asarray(<int[:npix]>rs_tmp.mtsRData).copy(), np.asarray(<int[:npix]>rs_c.mtsRData).copy()),
+        # ]
+        # shadow_ok = True
+        # for sname, np_arr, c_arr in shadow_pairs:
+        #     if not np.array_equal(np_arr, c_arr):
+        #         shadow_ok = False
+        #         diff_idx = np.where(np_arr != c_arr)
+        #         ndiff = len(diff_idx[0])
+        #         sys.stderr.write(
+        #             f"  MISMATCH {sname} region {ri}: {ndiff} diffs\n")
+        #         sys.stderr.flush()
+        # if shadow_ok:
+        #     sys.stderr.write(f"  region_setup numpy-main shadow OK for region {ri}\n")
+        #     sys.stderr.flush()
+        #
+        # region_cleanup_local(&rs_c, 0)
+        # ========== [注释掉 结束] ==========
 
-        rs_tmp.rXMin = py['rXMin']; rs_tmp.rYMin = py['rYMin']
-        rs_tmp.rXMax = py['rXMax']; rs_tmp.rYMax = py['rYMax']
-        rs_tmp.rXBMin = py['rXBMin']; rs_tmp.rYBMin = py['rYBMin']
-        rs_tmp.rXBMax = py['rXBMax']; rs_tmp.rYBMax = py['rYBMax']
-        rs_tmp.xBufLo = py['xBufLo']; rs_tmp.xBufHi = py['xBufHi']
-        rs_tmp.yBufLo = py['yBufLo']; rs_tmp.yBufHi = py['yBufHi']
-        rs_tmp.fpixelOutX = py['fpixelOutX']; rs_tmp.fpixelOutY = py['fpixelOutY']
-        rs_tmp.lpixelOutX = py['lpixelOutX']; rs_tmp.lpixelOutY = py['lpixelOutY']
-        rs_tmp.rPixX = py['rPixX']; rs_tmp.rPixY = py['rPixY']
-        rs_tmp.meansigSubstamps = 0.0; rs_tmp.scatterSubstamps = 0.0
-        rs_tmp.NskippedSubstamps = 0
+        # ========== [注释掉] C 子步骤调用 ==========
+        # bs_ret = region_buildstamps(&ctx, &prm, &rs_tmp, localFC)
+        # if bs_ret != 0:
+        #     region_cleanup_local(&rs_tmp, rs_tmp.convTmpl)
+        #     continue
+        #
+        # region_fit(&ctx, &prm, &rs_tmp, &localFC)
+        #
+        # region_convolve_diff(&ctx, &prm, ri, &rs_tmp, &localFC)
+        #
+        # region_output(&ctx, &prm, ri, &rs_tmp)
+        #
+        # region_cleanup_local(&rs_tmp, rs_tmp.convTmpl)
+        # ========== [注释掉 结束] ==========
 
-        # ========== C 影子验证 ==========
-        memset(&rs_c, 0, sizeof(region_state))
-        region_setup(&ctx, &prm, ri, &rs_c)
-
-        import sys
-        shadow_pairs = [
-            ('tRData', np.asarray(<float[:npix]>rs_tmp.tRData).copy(), np.asarray(<float[:npix]>rs_c.tRData).copy()),
-            ('iRData', np.asarray(<float[:npix]>rs_tmp.iRData).copy(), np.asarray(<float[:npix]>rs_c.iRData).copy()),
-            ('oRData', np.asarray(<float[:npix]>rs_tmp.oRData).copy(), np.asarray(<float[:npix]>rs_c.oRData).copy()),
-            ('eRData', np.asarray(<float[:npix]>rs_tmp.eRData).copy(), np.asarray(<float[:npix]>rs_c.eRData).copy()),
-            ('mRData', np.asarray(<int[:npix]>rs_tmp.mRData).copy(), np.asarray(<int[:npix]>rs_c.mRData).copy()),
-            ('misRData', np.asarray(<int[:npix]>rs_tmp.misRData).copy(), np.asarray(<int[:npix]>rs_c.misRData).copy()),
-            ('mtsRData', np.asarray(<int[:npix]>rs_tmp.mtsRData).copy(), np.asarray(<int[:npix]>rs_c.mtsRData).copy()),
-        ]
-        shadow_ok = True
-        for sname, np_arr, c_arr in shadow_pairs:
-            if not np.array_equal(np_arr, c_arr):
-                shadow_ok = False
-                diff_idx = np.where(np_arr != c_arr)
-                ndiff = len(diff_idx[0])
-                sys.stderr.write(
-                    f"  MISMATCH {sname} region {ri}: {ndiff} diffs\n")
-                sys.stderr.flush()
-        if shadow_ok:
-            sys.stderr.write(f"  region_setup numpy-main shadow OK for region {ri}\n")
-            sys.stderr.flush()
-
-        region_cleanup_local(&rs_c, 0)
-
-        # ========== 后续步骤用 rs_tmp（numpy 数据） ==========
-        bs_ret = region_buildstamps(&ctx, &prm, &rs_tmp, localFC)
-        if bs_ret != 0:
-            region_cleanup_local(&rs_tmp, rs_tmp.convTmpl)
+        # ========== 纯 Python/numpy 子步骤 ==========
+        t1 = tm.time()
+        bs_result = region_buildstamps_numpy(py, ctx_info, params_info, localFC_py)
+        tsys.stderr.write(f"  [{ri}] buildstamps: {tm.time()-t1:.3f}s\n"); tsys.stderr.flush()
+        if bs_result['status'] != 0:
             continue
 
-        region_fit(&ctx, &prm, &rs_tmp, &localFC)
+        t1 = tm.time()
+        fit_result = region_fit_numpy(bs_result, py, ctx_info, params_info, localFC_py)
+        tsys.stderr.write(f"  [{ri}] fit: {tm.time()-t1:.3f}s\n"); tsys.stderr.flush()
 
-        region_convolve_diff(&ctx, &prm, ri, &rs_tmp, &localFC)
+        t1 = tm.time()
+        conv_result = region_convolve_diff_numpy(
+            fit_result, py, bs_result, ctx_info, params_info, ri, localFC_py)
+        tsys.stderr.write(f"  [{ri}] convolve_diff: {tm.time()-t1:.3f}s\n"); tsys.stderr.flush()
+        localFC_py = conv_result.get('localForceConvolve', localFC_py)
 
-        region_output(&ctx, &prm, ri, &rs_tmp)
-
-        region_cleanup_local(&rs_tmp, rs_tmp.convTmpl)
+        t1 = tm.time()
+        stats_entry = region_output_numpy(
+            conv_result, py, fit_result,
+            diff_out, noise_out, conv_out, mask_out,
+            ctx_info, params_info, ri, None)
+        tsys.stderr.write(f"  [{ri}] output: {tm.time()-t1:.3f}s\n"); tsys.stderr.flush()
+        stats_list_py[ri] = stats_entry
 
     hotpants_cleanup(&ctx)
 
@@ -752,27 +827,61 @@ def hotpants(
     #     if 'HOTPANTS_DUMP_DIR' in os.environ:
     #         del os.environ['HOTPANTS_DUMP_DIR']
 
+    # ========== [注释掉] C stats 读取 ==========
+    # stats_list = []
+    # for si in range(nR):
+    #     stats_list.append({
+    #         'conv_tmpl': stats[si].convTmpl,
+    #         'sum_kernel': stats[si].sumKernel,
+    #         'mean_sig': stats[si].meansigSubstamps,
+    #         'scatter_sig': stats[si].scatterSubstamps,
+    #         'final_mean_sig': stats[si].meansigSubstampsF,
+    #         'final_scatter_sig': stats[si].scatterSubstampsF,
+    #         'x2norm': stats[si].x2norm,
+    #         'nx2norm': stats[si].nx2norm,
+    #         'diff_mean': stats[si].mean,
+    #         'diff_sd': stats[si].sd,
+    #         'noise_mean': stats[si].nmean,
+    #         'diff_mean_ok': stats[si].meanm,
+    #         'diff_sd_ok': stats[si].sdm,
+    #         'noise_mean_ok': stats[si].nmeanm,
+    #         'diffrat': stats[si].diffrat,
+    #     })
+    #
+    # free(stats)
+    # ========== [注释掉 结束] ==========
+
     stats_list = []
     for si in range(nR):
-        stats_list.append({
-            'conv_tmpl': stats[si].convTmpl,
-            'sum_kernel': stats[si].sumKernel,
-            'mean_sig': stats[si].meansigSubstamps,
-            'scatter_sig': stats[si].scatterSubstamps,
-            'final_mean_sig': stats[si].meansigSubstampsF,
-            'final_scatter_sig': stats[si].scatterSubstampsF,
-            'x2norm': stats[si].x2norm,
-            'nx2norm': stats[si].nx2norm,
-            'diff_mean': stats[si].mean,
-            'diff_sd': stats[si].sd,
-            'noise_mean': stats[si].nmean,
-            'diff_mean_ok': stats[si].meanm,
-            'diff_sd_ok': stats[si].sdm,
-            'noise_mean_ok': stats[si].nmeanm,
-            'diffrat': stats[si].diffrat,
-        })
-
-    free(stats)
+        if stats_list_py[si] is not None:
+            entry = stats_list_py[si]
+            stats_list.append({
+                'conv_tmpl': entry['convTmpl'],
+                'sum_kernel': entry['sumKernel'],
+                'mean_sig': entry['meansigSubstamps'],
+                'scatter_sig': entry['scatterSubstamps'],
+                'final_mean_sig': entry['meansigSubstampsF'],
+                'final_scatter_sig': entry['scatterSubstampsF'],
+                'x2norm': entry['x2norm'],
+                'nx2norm': entry['nx2norm'],
+                'diff_mean': entry['mean'],
+                'diff_sd': entry['sd'],
+                'noise_mean': entry['nmean'],
+                'diff_mean_ok': entry['meanm'],
+                'diff_sd_ok': entry['sdm'],
+                'noise_mean_ok': entry['nmeanm'],
+                'diffrat': entry['diffrat'],
+            })
+        else:
+            stats_list.append({
+                'conv_tmpl': 0, 'sum_kernel': 0.0,
+                'mean_sig': 0.0, 'scatter_sig': 0.0,
+                'final_mean_sig': 0.0, 'final_scatter_sig': 0.0,
+                'x2norm': 0.0, 'nx2norm': 0,
+                'diff_mean': 0.0, 'diff_sd': 0.0, 'noise_mean': 0.0,
+                'diff_mean_ok': 0.0, 'diff_sd_ok': 0.0, 'noise_mean_ok': 0.0,
+                'diffrat': 0.0,
+            })
     if pca_ptr != NULL:
         free(pca_ptr)
 
