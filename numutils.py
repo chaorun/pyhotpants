@@ -5920,7 +5920,9 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                          diff_out, noise_out, conv_out, mask_out,
                          ctx_info, params_info, region_idx, stats_list):
     import sys
+    import time
     logger.debug("[region %d] region_output_numpy start", region_idx)
+    start_time = time.time()
 
     nCompKer = ctx_info['nCompKer']
     nBGVectors = ctx_info['nBGVectors']
@@ -5996,6 +5998,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     mRData2d[:hwKernel, hwKernel:rPixX - hwKernel] |= FLAG_OUTPUT_ISBAD
     mRData2d[rPixY - hwKernel:, hwKernel:rPixX - hwKernel] |= FLAG_OUTPUT_ISBAD
 
+    tm1 = time.time(); logger.debug("[out] pre-output setup done, %.3fs", tm1 - start_time)
+
     sys.stderr.write(" Creating and writing output images...\n")
 
     inv1 = 1.0 / sumKernel
@@ -6033,6 +6037,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         oRData2d[inner_sy, inner_sx] *= -1.0
 
         if figMerit[0:1] == "v":
+            tm2 = time.time(); logger.debug("[out] final_stamp_sig loop start")
             temp2 = np.zeros(nS, dtype=np.float32)
             kk = 0
             for l in range(nS):
@@ -6054,6 +6059,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                             fwKSStamp, hwKSStamp, rPixX, mRData1d)
                         temp2[kk] = sig
                         kk += 1
+            tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
             mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
@@ -6069,6 +6075,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             noiseData2d[inner_sy, inner_sx] *= inv1
 
         if figMerit[0:1] == "v":
+            tm2 = time.time(); logger.debug("[out] final_stamp_sig loop start")
             temp2 = np.zeros(nS, dtype=np.float32)
             kk = 0
             for l in range(nS):
@@ -6090,6 +6097,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                             fwKSStamp, hwKSStamp, rPixX, mRData1d)
                         temp2[kk] = sig
                         kk += 1
+            tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
             mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
@@ -6098,6 +6106,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     oRData_2d = oRData1d.reshape(rPixY, rPixX)
     noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
     mRData_2d = mRData1d.reshape(rPixY, rPixX)
+
+    tm4 = time.time(); logger.debug("[out] get_stamp_stats3 start")
 
     sys.stderr.write(" Getting diffim stats for GOOD pixels : \n")
     res_good = get_stamp_stats3_numpy(
@@ -6151,6 +6161,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
 
     sys.stderr.write(" Emperical / Expected Noise for OK pixels = %.2f\n\n" % (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0))
 
+    tm5 = time.time(); logger.debug("[out] get_stamp_stats3 done, %.3fs", tm5 - tm4)
+
     if rescaleOK:
         if diffrat != 0:
             diffrat = (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0) / diffrat
@@ -6172,6 +6184,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
     mRData_2d = mRData1d.reshape(rPixY, rPixX)
 
+    tm6 = time.time(); logger.debug("[out] insert_subregion start")
+
     insert_subregion_flt_numpy(
         oRData_2d, diff_out, fpixelOutX, fpixelOutY,
         lpixelOutX, lpixelOutY, xBufLo, yBufLo)
@@ -6185,6 +6199,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         insert_subregion_int_numpy(
             mRData_2d, mask_out, fpixelOutX, fpixelOutY,
             lpixelOutX, lpixelOutY, xBufLo, yBufLo)
+
+    tm7 = time.time(); logger.debug("[out] insert_subregion done, %.3fs", tm7 - tm6)
 
     kerSol = convolve_result['kerSol']
 
