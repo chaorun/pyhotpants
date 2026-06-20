@@ -1318,6 +1318,73 @@ def build_matrix0_jit(vectors, mat, nCompKer, kerOrder, bgOrder, fwKSStamp):
     mat[ncomp1 + 1, ncomp1 + 1] = q
 
 
+@numba.jit(nopython=True)
+def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
+                     wxy, matrix,
+                     nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY,
+                     ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp):
+    rPixX2 = np.float64(np.float32(0.5 * rPixX))
+    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+
+    for istamp in range(nS):
+        if valid_mask[istamp] == 0:
+            continue
+
+        xstamp = all_x[istamp]
+        ystamp = all_y[istamp]
+        fx = np.float64(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
+        fy = np.float64(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
+
+        kk = 0
+        a1 = 1.0
+        for ideg1 in range(kerOrder + 1):
+            a2 = 1.0
+            for ideg2 in range(kerOrder - ideg1 + 1):
+                wxy[istamp, kk] = a1 * a2
+                kk += 1
+                a2 *= fy
+            a1 *= fx
+
+        for i in range(ncomp):
+            i1 = i // ncomp2
+            i2 = i - i1 * ncomp2
+
+            for j in range(i + 1):
+                j1 = j // ncomp2
+                j2 = j - j1 * ncomp2
+
+                matrix[i + 2, j + 2] += wxy[istamp, i2] * wxy[istamp, j2] * all_mat[istamp, i1 + 2, j1 + 2]
+
+        matrix[1, 1] += all_mat[istamp, 1, 1]
+        for i in range(ncomp):
+            i1 = i // ncomp2
+            i2 = i - i1 * ncomp2
+            matrix[i + 2, 1] += wxy[istamp, i2] * all_mat[istamp, i1 + 2, 1]
+
+        for ibg in range(nbg_vec):
+            ii = ncomp + ibg + 1
+            ivecbg = ncomp1 + ibg + 1
+            for i1 in range(1, ncomp1 + 1):
+                p0 = 0.0
+                for kk in range(pixStamp):
+                    p0 += all_vectors[istamp, i1, kk] * all_vectors[istamp, ivecbg, kk]
+
+                for i2 in range(ncomp2):
+                    jj = (i1 - 1) * ncomp2 + i2 + 1
+                    matrix[ii + 1, jj + 1] += p0 * wxy[istamp, i2]
+
+            p0 = 0.0
+            for kk in range(pixStamp):
+                p0 += all_vectors[istamp, 0, kk] * all_vectors[istamp, ivecbg, kk]
+            matrix[ii + 1, 1] += p0
+
+            for jbg in range(ibg + 1):
+                q = 0.0
+                for kk in range(pixStamp):
+                    q += all_vectors[istamp, ivecbg, kk] * all_vectors[istamp, ncomp1 + jbg + 1, kk]
+                matrix[ii + 1, ncomp + jbg + 2] += q
+
+
 def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
     build_matrix0_jit(stamp['vectors'], stamp['mat'], nCompKer, kerOrder, bgOrder, fwKSStamp)
 
@@ -1365,6 +1432,36 @@ def build_scprod0_jit(vectors, scprod, image, nCompKer, xi, yi, fwKSStamp, hwKSS
     scprod[ncomp1 + 1] = q
 
 
+@numba.jit(nopython=True)
+def build_scprod_jit(all_vectors, all_scprod, valid_mask, all_x, all_y,
+                     wxy, image_flat, kernelSol,
+                     nS, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX,
+                     ncomp, ncomp1, ncomp2, nbg_vec, pixStamp):
+    for istamp in range(nS):
+        if valid_mask[istamp] == 0:
+            continue
+
+        xi = all_x[istamp]
+        yi = all_y[istamp]
+
+        p0 = all_scprod[istamp, 1]
+        kernelSol[1] += p0
+
+        for i1 in range(1, ncomp1 + 1):
+            p0 = all_scprod[istamp, i1 + 1]
+            for i2 in range(ncomp2):
+                ii = (i1 - 1) * ncomp2 + i2 + 1
+                kernelSol[ii + 1] += p0 * wxy[istamp, i2]
+
+        for ibg in range(nbg_vec):
+            q = 0.0
+            for xc in range(-hwKSStamp, hwKSStamp + 1):
+                for yc in range(-hwKSStamp, hwKSStamp + 1):
+                    k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+                    q += all_vectors[istamp, ncomp1 + ibg + 1, k] * image_flat[xc + xi + rPixX * (yc + yi)]
+            kernelSol[ncomp + ibg + 2] += q
+
+
 def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
                          fwKSStamp, hwKSStamp, rPixX):
     xi = int(stamp['xss'][stamp['sscnt']])
@@ -1379,86 +1476,45 @@ def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp,
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
-
     pixStamp = fwKSStamp * fwKSStamp
-    rPixX2 = float(np.float32(0.5 * rPixX))
-    rPixY2 = float(np.float32(0.5 * rPixY))
-
     mat_size = ncomp1 * ncomp2 + nbg_vec + 1
 
+    valid_mask = np.zeros(nS, dtype=np.int32)
+    all_x = np.zeros(nS, dtype=np.int64)
+    all_y = np.zeros(nS, dtype=np.int64)
+    n_valid = 0
+    for i in range(nS):
+        if stamps_dicts[i]['sscnt'] < stamps_dicts[i]['nss']:
+            valid_mask[i] = 1
+            sscnt = stamps_dicts[i]['sscnt']
+            all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
+            all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
+            n_valid += 1
+
+    if n_valid == 0:
+        for i in range(nS):
+            for j in range(ncomp2):
+                wxy[i, j] = 0.0
+        matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
+        return matrix
+
+    nC = stamps_dicts[0]['mat'].shape[0]
+    nC_valid = nCompKer + 1
+    all_mat = np.zeros((nS, nC_valid, nC_valid), dtype=np.float64)
+    nvec_total = nCompKer + nbg_vec
+    all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
+    for i in range(nS):
+        if valid_mask[i]:
+            all_mat[i] = stamps_dicts[i]['mat'][:nC_valid, :nC_valid]
+            all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
+
+    wxy.fill(0.0)
     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
 
-    for i in range(nS):
-        for j in range(ncomp2):
-            wxy[i, j] = 0.0
-
-    istamp = 0
-    while istamp < nS:
-        while stamps_dicts[istamp]['sscnt'] >= stamps_dicts[istamp]['nss']:
-            istamp += 1
-            if istamp >= nS:
-                break
-        if istamp >= nS:
-            break
-
-        vec = stamps_dicts[istamp]['vectors']
-        sscnt = stamps_dicts[istamp]['sscnt']
-        xstamp = int(stamps_dicts[istamp]['xss'][sscnt])
-        ystamp = int(stamps_dicts[istamp]['yss'][sscnt])
-        fx = float(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
-        fy = float(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
-
-        k = 0
-        a1 = 1.0
-        for ideg1 in range(kerOrder + 1):
-            a2 = 1.0
-            for ideg2 in range(kerOrder - ideg1 + 1):
-                wxy[istamp, k] = a1 * a2
-                k += 1
-                a2 *= fy
-            a1 *= fx
-
-        matrix0 = stamps_dicts[istamp]['mat']
-        for i in range(ncomp):
-            i1 = i // ncomp2
-            i2 = i - i1 * ncomp2
-
-            for j in range(i + 1):
-                j1 = j // ncomp2
-                j2 = j - j1 * ncomp2
-
-                matrix[i + 2, j + 2] += wxy[istamp, i2] * wxy[istamp, j2] * matrix0[i1 + 2, j1 + 2]
-
-        matrix[1, 1] += matrix0[1, 1]
-        for i in range(ncomp):
-            i1 = i // ncomp2
-            i2 = i - i1 * ncomp2
-            matrix[i + 2, 1] += wxy[istamp, i2] * matrix0[i1 + 2, 1]
-
-        for ibg in range(nbg_vec):
-            i = ncomp + ibg + 1
-            ivecbg = ncomp1 + ibg + 1
-            for i1 in range(1, ncomp1 + 1):
-                p0 = 0.0
-                for k in range(pixStamp):
-                    p0 += vec[i1, k] * vec[ivecbg, k]
-
-                for i2 in range(ncomp2):
-                    jj = (i1 - 1) * ncomp2 + i2 + 1
-                    matrix[i + 1, jj + 1] += p0 * wxy[istamp, i2]
-
-            p0 = 0.0
-            for k in range(pixStamp):
-                p0 += vec[0, k] * vec[ivecbg, k]
-            matrix[i + 1, 1] += p0
-
-            for jbg in range(ibg + 1):
-                q = 0.0
-                for k in range(pixStamp):
-                    q += vec[ivecbg, k] * vec[ncomp1 + jbg + 1, k]
-                matrix[i + 1, ncomp + jbg + 2] += q
-
-        istamp += 1
+    build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
+                     wxy, matrix,
+                     nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY,
+                     ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp)
 
     for i in range(mat_size):
         for j in range(i + 1):
@@ -1466,49 +1522,181 @@ def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp,
 
     return matrix
 
+# def build_matrix_numpy_old(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
+#     ncomp1 = nCompKer - 1
+#     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+#     ncomp = ncomp1 * ncomp2
+#     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
+# 
+#     pixStamp = fwKSStamp * fwKSStamp
+#     rPixX2 = float(np.float32(0.5 * rPixX))
+#     rPixY2 = float(np.float32(0.5 * rPixY))
+# 
+#     mat_size = ncomp1 * ncomp2 + nbg_vec + 1
+# 
+#     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
+# 
+#     for i in range(nS):
+#         for j in range(ncomp2):
+#             wxy[i, j] = 0.0
+# 
+#     istamp = 0
+#     while istamp < nS:
+#         while stamps_dicts[istamp]['sscnt'] >= stamps_dicts[istamp]['nss']:
+#             istamp += 1
+#             if istamp >= nS:
+#                 break
+#         if istamp >= nS:
+#             break
+# 
+#         vec = stamps_dicts[istamp]['vectors']
+#         sscnt = stamps_dicts[istamp]['sscnt']
+#         xstamp = int(stamps_dicts[istamp]['xss'][sscnt])
+#         ystamp = int(stamps_dicts[istamp]['yss'][sscnt])
+#         fx = float(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
+#         fy = float(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
+# 
+#         k = 0
+#         a1 = 1.0
+#         for ideg1 in range(kerOrder + 1):
+#             a2 = 1.0
+#             for ideg2 in range(kerOrder - ideg1 + 1):
+#                 wxy[istamp, k] = a1 * a2
+#                 k += 1
+#                 a2 *= fy
+#             a1 *= fx
+# 
+#         matrix0 = stamps_dicts[istamp]['mat']
+#         for i in range(ncomp):
+#             i1 = i // ncomp2
+#             i2 = i - i1 * ncomp2
+# 
+#             for j in range(i + 1):
+#                 j1 = j // ncomp2
+#                 j2 = j - j1 * ncomp2
+# 
+#                 matrix[i + 2, j + 2] += wxy[istamp, i2] * wxy[istamp, j2] * matrix0[i1 + 2, j1 + 2]
+# 
+#         matrix[1, 1] += matrix0[1, 1]
+#         for i in range(ncomp):
+#             i1 = i // ncomp2
+#             i2 = i - i1 * ncomp2
+#             matrix[i + 2, 1] += wxy[istamp, i2] * matrix0[i1 + 2, 1]
+# 
+#         for ibg in range(nbg_vec):
+#             i = ncomp + ibg + 1
+#             ivecbg = ncomp1 + ibg + 1
+#             for i1 in range(1, ncomp1 + 1):
+#                 p0 = 0.0
+#                 for k in range(pixStamp):
+#                     p0 += vec[i1, k] * vec[ivecbg, k]
+# 
+#                 for i2 in range(ncomp2):
+#                     jj = (i1 - 1) * ncomp2 + i2 + 1
+#                     matrix[i + 1, jj + 1] += p0 * wxy[istamp, i2]
+# 
+#             p0 = 0.0
+#             for k in range(pixStamp):
+#                 p0 += vec[0, k] * vec[ivecbg, k]
+#             matrix[i + 1, 1] += p0
+# 
+#             for jbg in range(ibg + 1):
+#                 q = 0.0
+#                 for k in range(pixStamp):
+#                     q += vec[ivecbg, k] * vec[ncomp1 + jbg + 1, k]
+#                 matrix[i + 1, ncomp + jbg + 2] += q
+# 
+#         istamp += 1
+# 
+#     for i in range(mat_size):
+#         for j in range(i + 1):
+#             matrix[j + 1, i + 1] = matrix[i + 1, j + 1]
+# 
+#     return matrix
+
 
 def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    pixStamp = fwKSStamp * fwKSStamp
 
+    valid_mask = np.zeros(nS, dtype=np.int32)
+    all_x = np.zeros(nS, dtype=np.int64)
+    all_y = np.zeros(nS, dtype=np.int64)
+    n_valid = 0
+    for i in range(nS):
+        if stamps_dicts[i]['sscnt'] < stamps_dicts[i]['nss']:
+            valid_mask[i] = 1
+            sscnt = stamps_dicts[i]['sscnt']
+            all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
+            all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
+            n_valid += 1
+
+    if n_valid == 0:
+        return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+
+    all_scprod = np.zeros((nS, nCompKer + 1), dtype=np.float64)
+    nvec_total = nCompKer + nbg_vec
+    all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
+    for i in range(nS):
+        if valid_mask[i]:
+            all_scprod[i] = stamps_dicts[i]['scprod'][:nCompKer + 1]
+            all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
+
+    image_arr = np.asarray(image, dtype=np.float64)
     kernelSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
 
-    istamp = 0
-    while istamp < nS:
-        while stamps_dicts[istamp]['sscnt'] >= stamps_dicts[istamp]['nss']:
-            istamp += 1
-            if istamp >= nS:
-                break
-        if istamp >= nS:
-            break
-
-        vec = stamps_dicts[istamp]['vectors']
-        sscnt = stamps_dicts[istamp]['sscnt']
-        xi = int(stamps_dicts[istamp]['xss'][sscnt])
-        yi = int(stamps_dicts[istamp]['yss'][sscnt])
-
-        p0 = stamps_dicts[istamp]['scprod'][1]
-        kernelSol[1] += p0
-
-        for i1 in range(1, ncomp1 + 1):
-            p0 = stamps_dicts[istamp]['scprod'][i1 + 1]
-            for i2 in range(ncomp2):
-                ii = (i1 - 1) * ncomp2 + i2 + 1
-                kernelSol[ii + 1] += p0 * wxy[istamp, i2]
-
-        for ibg in range(nbg_vec):
-            q = 0.0
-            for xc in range(-hwKSStamp, hwKSStamp + 1):
-                for yc in range(-hwKSStamp, hwKSStamp + 1):
-                    k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-                    q += vec[ncomp1 + ibg + 1, k] * float(image[xc + xi + rPixX * (yc + yi)])
-            kernelSol[ncomp + ibg + 2] += q
-
-        istamp += 1
+    build_scprod_jit(all_vectors, all_scprod, valid_mask, all_x, all_y,
+                     wxy, image_arr, kernelSol,
+                     nS, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX,
+                     ncomp, ncomp1, ncomp2, nbg_vec, pixStamp)
 
     return kernelSol
+
+# def build_scprod_numpy_old(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
+#     ncomp1 = nCompKer - 1
+#     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+#     ncomp = ncomp1 * ncomp2
+#     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
+# 
+#     kernelSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+# 
+#     istamp = 0
+#     while istamp < nS:
+#         while stamps_dicts[istamp]['sscnt'] >= stamps_dicts[istamp]['nss']:
+#             istamp += 1
+#             if istamp >= nS:
+#                 break
+#         if istamp >= nS:
+#             break
+# 
+#         vec = stamps_dicts[istamp]['vectors']
+#         sscnt = stamps_dicts[istamp]['sscnt']
+#         xi = int(stamps_dicts[istamp]['xss'][sscnt])
+#         yi = int(stamps_dicts[istamp]['yss'][sscnt])
+# 
+#         p0 = stamps_dicts[istamp]['scprod'][1]
+#         kernelSol[1] += p0
+# 
+#         for i1 in range(1, ncomp1 + 1):
+#             p0 = stamps_dicts[istamp]['scprod'][i1 + 1]
+#             for i2 in range(ncomp2):
+#                 ii = (i1 - 1) * ncomp2 + i2 + 1
+#                 kernelSol[ii + 1] += p0 * wxy[istamp, i2]
+# 
+#         for ibg in range(nbg_vec):
+#             q = 0.0
+#             for xc in range(-hwKSStamp, hwKSStamp + 1):
+#                 for yc in range(-hwKSStamp, hwKSStamp + 1):
+#                     k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+#                     q += vec[ncomp1 + ibg + 1, k] * float(image[xc + xi + rPixX * (yc + yi)])
+#             kernelSol[ncomp + ibg + 2] += q
+# 
+#         istamp += 1
+# 
+#     return kernelSol
 
 
 def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
