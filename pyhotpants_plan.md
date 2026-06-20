@@ -502,11 +502,78 @@ for ri in range(nR):
 
 纯 numpy 主循环逻辑正确（mask 精确匹配，数值差异在浮点精度范围内），但性能需要后续优化。
 
-#### 后续优化方向
+#### 后续优化方向（初始预估，已被实际优化结果替代）
 
-| 方案 | 预期加速 | 改动量 |
-|------|----------|--------|
-| spatial_convolve 矢量化（numpy 批量矩阵运算） | 10-50x | 中 |
-| numba.jit 加速关键循环 | 50-100x | 低 |
-| 保留 Cython 版本的性能关键函数 | 100x | 低（混合模式） |
-| scipy.ndimage/fft 卷积 | 10-50x | 中 |
+见下方"性能优化记录"。
+
+### 性能优化记录
+
+#### 优化历程
+
+| 步骤 | 措施 | 效果 | commit |
+|------|------|------|--------|
+| 初版 | 纯 Python 逐行翻译 C 代码 | 670s (134x vs C) | ec0df6b |
+| 优化1 | spatial_convolve FFT 可分离卷积 | 670→418s | ae1403d |
+| 优化2 | xy_conv_stamp im2col + GEMM | fit 95→22s | 167d68e |
+| 优化3 | spatial_convolve mask 修复 (fftconvolve bad_count) | maskOut EXACT MATCH | 2990239 |
+| 优化4 | np.linalg.solve 替代 ludcmp+lubksb | 293→275s | 6485de2 |
+| 优化5 | getStampStats3 矢量化 (np.histogram) | output 14→10.6s | f766be6 |
+| 优化6 | numba @jit build_matrix0/build_scprod0 | fit 22→0.6s | 424d777 |
+| 优化7 | numba @jit build_matrix/build_scprod | convolve_diff 220→135s | 548a226 |
+| 优化8 | sigma_clip 矢量化 | output 10.5→4.3s, buildstamps 3.8→2.4s | d401ea8 |
+| 优化9 | numba @jit mask_check_loop | mask loop 51.5→0.3s, total 144→90s | 7d694c3 |
+
+#### 当前性能分布（1K×1K 单 region，90s）
+
+| 步骤 | 耗时 | 占比 | 内部瓶颈 |
+|------|------|------|---------|
+| setup | 0.05s | 0% | — |
+| buildstamps | 2.4s | 3% | — |
+| fit | 0.6s | 1% | numba 已解决 |
+| **convolve_diff** | **82s** | **91%** | 见下表 |
+| output | 4.2s | 5% | — |
+| **总计** | **~90s** | | C ~5s, **18x** |
+
+#### convolve_diff 82s 细分
+
+| 子步骤 | 耗时 | 占比 | 技术 |
+|--------|------|------|------|
+| fitKernel (17次迭代) | ~22s | 27% | build_matrix numba, check_again 1.25s/次 |
+| ├ build_matrix+scprod | ~0.5s | | numba @jit |
+| └ check_again | ~21s | | get_stamp_sig 逐 stamp 循环 |
+| **variance 交叉卷积** | **~50s** | **61%** | 49²/2=1225 次 fftconvolve |
+| FFT 卷积 (49 bases) | 1.7s | 2% | scipy.signal.fftconvolve |
+| 系数场+加权求和 | 0.7s | 1% | numpy 矢量化 |
+| mask loop | 0.3s | 0% | numba @jit |
+| background | 3s | 4% | 逐像素 get_background |
+| noise_combine | 3s | 4% | numpy |
+
+#### 当前精度报告（优化后 vs C）
+
+| 输出数组 | max 绝对误差 | >1 像素数 | 评估 |
+|----------|-------------|----------|------|
+| maskOut | 0 | 0 | **EXACT MATCH** |
+| noiseOut | 3.05e-5 | 0 | 可接受 |
+| convOut | 2.54e-2 | 0 | 可接受 |
+| diffOut | 2.57e-2 | 0 | 可接受 |
+
+#### 剩余优化方向
+
+| 目标 | 当前耗时 | 优化方式 | 预期效果 | 难度 |
+|------|---------|---------|---------|------|
+| variance 交叉卷积 | ~50s | convolveVariance=1 模式或预计算优化 | 50→2s | 中 |
+| check_again/get_stamp_sig | ~21s | make_model+sig 循环 numba 化 | 21→1s | 低 |
+| background 循环 | 3s | get_background 矢量化 | 3→0.1s | 低 |
+| noise_combine | 3s | 已是 numpy，空间不大 | — | — |
+| cupy GPU 加速 | — | 将 numpy/scipy 替换为 cupy | 全面 10-100x | 中 |
+
+#### 技术栈总结
+
+| 组件 | 技术 | 说明 |
+|------|------|------|
+| 卷积核心 | scipy.signal.fftconvolve | 可分离 FFT 卷积 |
+| 矩阵拟合 | np.linalg.solve | LAPACK 底层 |
+| 关键循环 | numba @jit(nopython=True) | build_matrix0/scprod0, build_matrix/scprod, mask_check_loop |
+| 统计 | np.histogram + np.cumsum | 矢量化直方图 |
+| stamp 管理 | Python dict 列表 | C↔Python 双向转换函数就绪 |
+| 随机数 | Ran1 类 | 与 C ran1 完全一致 |
