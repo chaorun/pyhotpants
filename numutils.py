@@ -2384,7 +2384,8 @@ def variance_convolve_jit(var_in, var_out, xSize, ySize, hwKernel, fwKernel,
                         cx = i - hwKernel + ic
                         k_idx = (fwKernel - 1 - ic) + (fwKernel - 1 - jc) * fwKernel
                         kk = kernel[k_idx]
-                        var_sum += abs(kk) * var_in[cy, cx]
+                        # C 代码实际效果等价于 kk*kk（方差传播），非 abs(kk)
+                        var_sum += kk * kk * var_in[cy, cx]
 
             var_out[j, i] = var_sum
 
