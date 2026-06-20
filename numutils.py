@@ -827,9 +827,12 @@ def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
     floorVal = sky + kerFitThresh * sa.fwhm[si]
 
     allocSize = max(1, (xLen * yLen) // hwKSStamp)
-    xloc = [0] * allocSize
-    yloc = [0] * allocSize
-    peaks = [0.0] * allocSize
+    # xloc = [0] * allocSize
+    xloc = np.zeros(allocSize, dtype=np.int32)
+    # yloc = [0] * allocSize
+    yloc = np.zeros(allocSize, dtype=np.int32)
+    # peaks = [0.0] * allocSize
+    peaks = np.zeros(allocSize, dtype=np.float64)
 
     brk = 0
     pcnt = 0
@@ -932,7 +935,8 @@ def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
     if pcnt == 0:
         return 1
     else:
-        qs = quick_sort_impl(peaks, pcnt)
+        # qs = quick_sort_impl(peaks, pcnt)
+        qs = np.argsort(peaks[:pcnt])
         # nssOrig = stamp['nss']
         nssOrig = sa.nss[si]
         idx = nssOrig
