@@ -1815,10 +1815,12 @@ def background_loop_jit(oRData1d, kernelSol, nCompKer, kerOrder, bgOrder, rPixX,
             oRData1d[i + rPixX * j] += bg
 
 
+@numba.jit(nopython=True)
 def get_final_stamp_sig_numpy(saXss, saYss, saSscnt, si, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
     # def get_final_stamp_sig_numpy(sa, si, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
-    xRegion = int(saXss[si, saSscnt[si]])
-    yRegion = int(saYss[si, saSscnt[si]])
+    FLAG = np.int32(0x80)
+    xRegion = saXss[si, saSscnt[si]]
+    yRegion = saYss[si, saSscnt[si]]
     sig = 0.0
     nsig = 0
     for j in range(fwKSStamp):
@@ -1826,12 +1828,12 @@ def get_final_stamp_sig_numpy(saXss, saYss, saSscnt, si, imDiff, imNoise, fwKSSt
         for i in range(fwKSStamp):
             xRegion2 = xRegion - hwKSStamp + i
             idx = xRegion2 + rPixX * yRegion2
-            idat = np.float32(imDiff[idx])
-            indat = np.float32(1.0 / float(np.float32(imNoise[idx])))
-            if int(mRData[idx]) & FLAG_INPUT_ISBAD:
+            idat = imDiff[idx]
+            ndat = imNoise[idx]
+            if (mRData[idx] & FLAG) != 0:
                 continue
             nsig += 1
-            sig += float(np.float32(np.float32(np.float32(idat * idat) * indat) * indat))
+            sig += (idat * idat) / (ndat * ndat)
     if nsig > 0:
         sig /= nsig
     else:
@@ -2749,128 +2751,128 @@ def make_model_numpy(sa, si, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSSt
 #     return csModel
 
 
-# @numba.jit(nopython=True)
-# def fill_stamp_numba_kernel(
-#     image, imRef, filterX, filterY,
-#     xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
-#     rPixX, rPixY, nCompKer, kerOrder, bgOrder,
-#     nvec, renFlags_arr, fillVal, mRData1d, verbose,
-#     out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val):
+@numba.jit(nopython=True)
+def fill_stamp_numba_kernel(
+    image, imRef, filterX, filterY,
+    xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
+    rPixX, rPixY, nCompKer, kerOrder, bgOrder,
+    nvec, renFlags_arr, fillVal, mRData1d, verbose,
+    out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val):
+
+    LOCAL_FLAG_INPUT_ISBAD = 0x80
+    fwSqStamp = fwKSStamp * fwKSStamp
+    fwSqKernel = fwKernel * fwKernel
+    nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
 # 
-#     LOCAL_FLAG_INPUT_ISBAD = 0x80
-#     fwSqStamp = fwKSStamp * fwKSStamp
-#     fwSqKernel = fwKernel * fwKernel
-#     nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    # ========== Step 1: inlined xy_conv_stamp_fast_numba_kernel ==========
+    kernels = np.zeros((nvec, fwSqKernel), dtype=np.float64)
+    for n in range(nvec):
+        for jc in range(fwKernel):
+            for ic in range(fwKernel):
+                fy_idx = fwKernel - 1 - jc
+                fx_idx = fwKernel - 1 - ic
+                kernels[n, jc * fwKernel + ic] = filterY[n * fwKernel + fy_idx] * filterX[n * fwKernel + fx_idx]
+
+    for n in range(nvec):
+        for fsi in range(fwSqStamp):
+            out_vectors[n, fsi] = 0.0
+
+    for fsi in range(fwSqStamp):
+        fsi_x = fsi % fwKSStamp
+        fsi_y = fsi // fwKSStamp
+        img_base_x = xi - hwKSStamp + fsi_x - hwKernel
+        img_base_y = yi - hwKSStamp + fsi_y - hwKernel
+        for fki in range(fwSqKernel):
+            kx = fki % fwKernel
+            ky = fki // fwKernel
+            img_x = img_base_x + kx
+            img_y = img_base_y + ky
+            img_val = image[img_x + rPixX * img_y]
+            for n in range(nvec):
+                out_vectors[n, fsi] += kernels[n, fki] * img_val
+
+    for n in range(nvec):
+        if renFlags_arr[n]:
+            for fsi in range(fwSqStamp):
+                out_vectors[n, fsi] -= out_vectors[0, fsi]
 # 
-#     # ========== Step 1: inlined xy_conv_stamp_fast_numba_kernel ==========
-#     kernels = np.zeros((nvec, fwSqKernel), dtype=np.float64)
-#     for n in range(nvec):
-#         for jc in range(fwKernel):
-#             for ic in range(fwKernel):
-#                 fy_idx = fwKernel - 1 - jc
-#                 fx_idx = fwKernel - 1 - ic
-#                 kernels[n, jc * fwKernel + ic] = filterY[n * fwKernel + fy_idx] * filterX[n * fwKernel + fx_idx]
-# 
-#     for n in range(nvec):
-#         for fsi in range(fwSqStamp):
-#             out_vectors[n, fsi] = 0.0
-# 
-#     for fsi in range(fwSqStamp):
-#         fsi_x = fsi % fwKSStamp
-#         fsi_y = fsi // fwKSStamp
-#         img_base_x = xi - hwKSStamp + fsi_x - hwKernel
-#         img_base_y = yi - hwKSStamp + fsi_y - hwKernel
-#         for fki in range(fwSqKernel):
-#             kx = fki % fwKernel
-#             ky = fki // fwKernel
-#             img_x = img_base_x + kx
-#             img_y = img_base_y + ky
-#             img_val = image[img_x + rPixX * img_y]
-#             for n in range(nvec):
-#                 out_vectors[n, fsi] += kernels[n, fki] * img_val
-# 
-#     for n in range(nvec):
-#         if renFlags_arr[n]:
-#             for fsi in range(fwSqStamp):
-#                 out_vectors[n, fsi] -= out_vectors[0, fsi]
-# 
-#     # ========== Step 2: inlined cut_sstamp_numpy ==========
-#     for fsi in range(fwSqStamp):
-#         out_krefArea[fsi] = fillVal
-# 
-#     sumVal = 0.0
-#     for y_offset in range(fwKSStamp):
-#         img_y = yi - hwKSStamp + y_offset
-#         for x_offset in range(fwKSStamp):
-#             img_x = xi - hwKSStamp + x_offset
-#             k = img_x + rPixX * img_y
-#             dpt = imRef[k]
-#             out_krefArea[x_offset + y_offset * fwKSStamp] = dpt
-#             if (mRData1d[k] & LOCAL_FLAG_INPUT_ISBAD) == 0:
-#                 sumVal += abs(dpt)
-# 
-#     out_sum_val[0] = sumVal
-# 
-#     # ========== Step 3: background vectors ==========
-#     rPixX2 = np.float64(np.float32(0.5 * rPixX))
-#     rPixY2 = np.float64(np.float32(0.5 * rPixY))
-#     for y_offset in range(fwKSStamp):
-#         j = yi - hwKSStamp + y_offset
-#         yf = (j - rPixY2) / rPixY2
-#         for x_offset in range(fwKSStamp):
-#             i = xi - hwKSStamp + x_offset
-#             xf = (i - rPixX2) / rPixX2
-#             ipix = x_offset + y_offset * fwKSStamp
-#             ax = 1.0
-#             nv = nvec
-#             for idegx in range(bgOrder + 1):
-#                 ay = 1.0
-#                 for idegy in range(bgOrder - idegx + 1):
-#                     out_vectors[nv, ipix] = ax * ay
-#                     ay *= yf
-#                     nv += 1
-#                 ax *= xf
-# 
-#     # ========== Step 4: inlined build_matrix0_jit ==========
-#     ncomp1 = nCompKer
-#     pixStamp = fwSqStamp
-# 
-#     for i in range(ncomp1):
-#         for j in range(i + 1):
-#             q = 0.0
-#             for k in range(pixStamp):
-#                 q += out_vectors[i, k] * out_vectors[j, k]
-#             out_mat[i + 1, j + 1] = q
-# 
-#     ivecbg = ncomp1
-#     for i1 in range(ncomp1):
-#         p0 = 0.0
-#         for k in range(pixStamp):
-#             p0 += out_vectors[i1, k] * out_vectors[ivecbg, k]
-#         out_mat[ncomp1 + 1, i1 + 1] = p0
-# 
-#     q = 0.0
-#     for k in range(pixStamp):
-#         q += out_vectors[ivecbg, k] * out_vectors[ncomp1, k]
-#     out_mat[ncomp1 + 1, ncomp1 + 1] = q
-# 
-#     # ========== Step 5: inlined build_scprod0_jit ==========
-#     for i1 in range(ncomp1):
-#         p0 = 0.0
-#         for xc in range(-hwKSStamp, hwKSStamp + 1):
-#             for yc in range(-hwKSStamp, hwKSStamp + 1):
-#                 k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-#                 p0 += out_vectors[i1, k] * out_krefArea[k]
-#         out_scprod[i1 + 1] = p0
-# 
-#     q = 0.0
-#     for xc in range(-hwKSStamp, hwKSStamp + 1):
-#         for yc in range(-hwKSStamp, hwKSStamp + 1):
-#             k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-#             q += out_vectors[ncomp1, k] * out_krefArea[k]
-#     out_scprod[ncomp1 + 1] = q
-# 
-#     return 0
+    # ========== Step 2: inlined cut_sstamp_numpy ==========
+    for fsi in range(fwSqStamp):
+        out_krefArea[fsi] = fillVal
+
+    sumVal = 0.0
+    for y_offset in range(fwKSStamp):
+        img_y = yi - hwKSStamp + y_offset
+        for x_offset in range(fwKSStamp):
+            img_x = xi - hwKSStamp + x_offset
+            k = img_x + rPixX * img_y
+            dpt = imRef[k]
+            out_krefArea[x_offset + y_offset * fwKSStamp] = dpt
+            if (mRData1d[k] & LOCAL_FLAG_INPUT_ISBAD) == 0:
+                sumVal += abs(dpt)
+
+    out_sum_val[0] = sumVal
+
+    # ========== Step 3: background vectors ==========
+    rPixX2 = np.float64(np.float32(0.5 * rPixX))
+    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+    for y_offset in range(fwKSStamp):
+        j = yi - hwKSStamp + y_offset
+        yf = (j - rPixY2) / rPixY2
+        for x_offset in range(fwKSStamp):
+            i = xi - hwKSStamp + x_offset
+            xf = (i - rPixX2) / rPixX2
+            ipix = x_offset + y_offset * fwKSStamp
+            ax = 1.0
+            nv = nvec
+            for idegx in range(bgOrder + 1):
+                ay = 1.0
+                for idegy in range(bgOrder - idegx + 1):
+                    out_vectors[nv, ipix] = ax * ay
+                    ay *= yf
+                    nv += 1
+                ax *= xf
+
+    # ========== Step 4: inlined build_matrix0_jit ==========
+    ncomp1 = nCompKer
+    pixStamp = fwSqStamp
+
+    for i in range(ncomp1):
+        for j in range(i + 1):
+            q = 0.0
+            for k in range(pixStamp):
+                q += out_vectors[i, k] * out_vectors[j, k]
+            out_mat[i + 1, j + 1] = q
+
+    ivecbg = ncomp1
+    for i1 in range(ncomp1):
+        p0 = 0.0
+        for k in range(pixStamp):
+            p0 += out_vectors[i1, k] * out_vectors[ivecbg, k]
+        out_mat[ncomp1 + 1, i1 + 1] = p0
+
+    q = 0.0
+    for k in range(pixStamp):
+        q += out_vectors[ivecbg, k] * out_vectors[ncomp1, k]
+    out_mat[ncomp1 + 1, ncomp1 + 1] = q
+
+    # ========== Step 5: inlined build_scprod0_jit ==========
+    for i1 in range(ncomp1):
+        p0 = 0.0
+        for xc in range(-hwKSStamp, hwKSStamp + 1):
+            for yc in range(-hwKSStamp, hwKSStamp + 1):
+                k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+                p0 += out_vectors[i1, k] * out_krefArea[k]
+        out_scprod[i1 + 1] = p0
+
+    q = 0.0
+    for xc in range(-hwKSStamp, hwKSStamp + 1):
+        for yc in range(-hwKSStamp, hwKSStamp + 1):
+            k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+            q += out_vectors[ncomp1, k] * out_krefArea[k]
+    out_scprod[ncomp1 + 1] = q
+
+    return 0
 
 
 def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
@@ -4813,6 +4815,30 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             #             for _ in range(nStamps)]
             ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
 
+        # None-safe 辅助变量：当 forceConvolve=="t" 时 ciSa 为 None，forceConvolve=="i" 时 ctSa 为 None
+        if ctSa is not None:
+            ctNss = ctSa.nss; ctX0 = ctSa.x0; ctY0 = ctSa.y0; ctX = ctSa.x; ctY = ctSa.y
+            ctSumVal = ctSa.sum_val; ctMeanVal = ctSa.mean_val; ctMedian = ctSa.median; ctMode = ctSa.mode
+            ctSd = ctSa.sd; ctFwhm = ctSa.fwhm; ctLfwhm = ctSa.lfwhm; ctXss = ctSa.xss; ctYss = ctSa.yss; ctSscnt = ctSa.sscnt
+        else:
+            ctNss = np.zeros(1, dtype=np.int32); ctX0 = np.zeros(1, dtype=np.int32); ctY0 = np.zeros(1, dtype=np.int32)
+            ctX = np.zeros(1, dtype=np.int32); ctY = np.zeros(1, dtype=np.int32)
+            ctSumVal = np.zeros(1, dtype=np.float64); ctMeanVal = np.zeros(1, dtype=np.float64); ctMedian = np.zeros(1, dtype=np.float64)
+            ctMode = np.zeros(1, dtype=np.float64); ctSd = np.zeros(1, dtype=np.float64); ctFwhm = np.zeros(1, dtype=np.float64)
+            ctLfwhm = np.zeros(1, dtype=np.float64); ctXss = np.zeros((1, 1), dtype=np.int32); ctYss = np.zeros((1, 1), dtype=np.int32)
+            ctSscnt = np.zeros(1, dtype=np.int32)
+        if ciSa is not None:
+            ciNss = ciSa.nss; ciX0 = ciSa.x0; ciY0 = ciSa.y0; ciX = ciSa.x; ciY = ciSa.y
+            ciSumVal = ciSa.sum_val; ciMeanVal = ciSa.mean_val; ciMedian = ciSa.median; ciMode = ciSa.mode
+            ciSd = ciSa.sd; ciFwhm = ciSa.fwhm; ciLfwhm = ciSa.lfwhm; ciXss = ciSa.xss; ciYss = ciSa.yss; ciSscnt = ciSa.sscnt
+        else:
+            ciNss = np.zeros(1, dtype=np.int32); ciX0 = np.zeros(1, dtype=np.int32); ciY0 = np.zeros(1, dtype=np.int32)
+            ciX = np.zeros(1, dtype=np.int32); ciY = np.zeros(1, dtype=np.int32)
+            ciSumVal = np.zeros(1, dtype=np.float64); ciMeanVal = np.zeros(1, dtype=np.float64); ciMedian = np.zeros(1, dtype=np.float64)
+            ciMode = np.zeros(1, dtype=np.float64); ciSd = np.zeros(1, dtype=np.float64); ciFwhm = np.zeros(1, dtype=np.float64)
+            ciLfwhm = np.zeros(1, dtype=np.float64); ciXss = np.zeros((1, 1), dtype=np.int32); ciYss = np.zeros((1, 1), dtype=np.int32)
+            ciSscnt = np.zeros(1, dtype=np.int32)
+
         for l in range(nStampY):
             for k in range(nStampX):
                 sys.stderr.write("Build stamp  : t %4d i %4d (grid coord %2d %2d)\n" % (ntS, niS, k, l))
@@ -4879,13 +4905,13 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                                 sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
                                 rXBMin, rYBMin,
                                 # ctSa 扁平
-                                ctSa.nss, ctSa.x0, ctSa.y0, ctSa.x, ctSa.y,
-                                ctSa.sum_val, ctSa.mean_val, ctSa.median, ctSa.mode, ctSa.sd, ctSa.fwhm, ctSa.lfwhm,
-                                ctSa.xss, ctSa.yss, ctSa.sscnt,
+                                ctNss, ctX0, ctY0, ctX, ctY,
+                                ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
+                                ctXss, ctYss, ctSscnt,
                                 # ciSa 扁平
-                                ciSa.nss, ciSa.x0, ciSa.y0, ciSa.x, ciSa.y,
-                                ciSa.sum_val, ciSa.mean_val, ciSa.median, ciSa.mode, ciSa.sd, ciSa.fwhm, ciSa.lfwhm,
-                                ciSa.xss, ciSa.yss, ciSa.sscnt,
+                                ciNss, ciX0, ciY0, ciX, ciY,
+                                ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
+                                ciXss, ciYss, ciSscnt,
                                 iRData1d, tRData1d,
                                 xcmp[m] - rXBMin, ycmp[m] - rYBMin,
                                 verbose, localForceConvolve, rPixX, rPixY,
@@ -4958,13 +4984,13 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
                             rXBMin, rYBMin,
                             # ctSa 扁平
-                            ctSa.nss, ctSa.x0, ctSa.y0, ctSa.x, ctSa.y,
-                            ctSa.sum_val, ctSa.mean_val, ctSa.median, ctSa.mode, ctSa.sd, ctSa.fwhm, ctSa.lfwhm,
-                            ctSa.xss, ctSa.yss, ctSa.sscnt,
+                            ctNss, ctX0, ctY0, ctX, ctY,
+                            ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
+                            ctXss, ctYss, ctSscnt,
                             # ciSa 扁平
-                            ciSa.nss, ciSa.x0, ciSa.y0, ciSa.x, ciSa.y,
-                            ciSa.sum_val, ciSa.mean_val, ciSa.median, ciSa.mode, ciSa.sd, ciSa.fwhm, ciSa.lfwhm,
-                            ciSa.xss, ciSa.yss, ciSa.sscnt,
+                            ciNss, ciX0, ciY0, ciX, ciY,
+                            ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
+                            ciXss, ciYss, ciSscnt,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
@@ -5027,13 +5053,13 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
                             rXBMin, rYBMin,
                             # ctSa 扁平
-                            ctSa.nss, ctSa.x0, ctSa.y0, ctSa.x, ctSa.y,
-                            ctSa.sum_val, ctSa.mean_val, ctSa.median, ctSa.mode, ctSa.sd, ctSa.fwhm, ctSa.lfwhm,
-                            ctSa.xss, ctSa.yss, ctSa.sscnt,
+                            ctNss, ctX0, ctY0, ctX, ctY,
+                            ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
+                            ctXss, ctYss, ctSscnt,
                             # ciSa 扁平
-                            ciSa.nss, ciSa.x0, ciSa.y0, ciSa.x, ciSa.y,
-                            ciSa.sum_val, ciSa.mean_val, ciSa.median, ciSa.mode, ciSa.sd, ciSa.fwhm, ciSa.lfwhm,
-                            ciSa.xss, ciSa.yss, ciSa.sscnt,
+                            ciNss, ciX0, ciY0, ciX, ciY,
+                            ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
+                            ciXss, ciYss, ciSscnt,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
@@ -5095,13 +5121,13 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
                             rXBMin, rYBMin,
                             # ctSa 扁平
-                            ctSa.nss, ctSa.x0, ctSa.y0, ctSa.x, ctSa.y,
-                            ctSa.sum_val, ctSa.mean_val, ctSa.median, ctSa.mode, ctSa.sd, ctSa.fwhm, ctSa.lfwhm,
-                            ctSa.xss, ctSa.yss, ctSa.sscnt,
+                            ctNss, ctX0, ctY0, ctX, ctY,
+                            ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
+                            ctXss, ctYss, ctSscnt,
                             # ciSa 扁平
-                            ciSa.nss, ciSa.x0, ciSa.y0, ciSa.x, ciSa.y,
-                            ciSa.sum_val, ciSa.mean_val, ciSa.median, ciSa.mode, ciSa.sd, ciSa.fwhm, ciSa.lfwhm,
-                            ciSa.xss, ciSa.yss, ciSa.sscnt,
+                            ciNss, ciX0, ciY0, ciX, ciY,
+                            ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
+                            ciXss, ciYss, ciSscnt,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
