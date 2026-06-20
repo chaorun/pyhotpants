@@ -1016,6 +1016,29 @@ def get_background_numpy(xi, yi, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, 
     return background
 
 
+@numba.jit(nopython=True)
+def background_loop_jit(oRData1d, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel):
+    nCompForBG = nCompKer - 1
+    ncompBG = nCompForBG * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+    halfX = np.float64(0.5 * rPixX)
+    halfY = np.float64(0.5 * rPixY)
+    for j in range(hwKernel, rPixY - hwKernel):
+        yf = (j - halfY) / halfY
+        for i in range(hwKernel, rPixX - hwKernel):
+            xf = (i - halfX) / halfX
+            bg = np.float64(0.0)
+            k = 1
+            ax = np.float64(1.0)
+            for idegx in range(bgOrder + 1):
+                ay = np.float64(1.0)
+                for idegy in range(bgOrder - idegx + 1):
+                    bg += kernelSol[ncompBG + k] * ax * ay
+                    k += 1
+                    ay *= yf
+                ax *= xf
+            oRData1d[i + rPixX * j] += bg
+
+
 def get_final_stamp_sig_numpy(stamp, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
     xRegion = int(stamp['xss'][stamp['sscnt']])
     yRegion = int(stamp['yss'][stamp['sscnt']])
@@ -3297,10 +3320,14 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         logger.debug("[region %d] convolve_diff: realloc+mask start", region_idx)
         oRData1d = np.full(rPixX * rPixY, fillVal, dtype=np.float32)
 
-        for idx in range(rPixX * rPixY):
-            mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(tRData1d[idx] == fillVal)
-            mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(tRData1d[idx] >= tUThresh)
-            mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(tRData1d[idx] <= tLThresh)
+        # for idx in range(rPixX * rPixY):
+        #     mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(tRData1d[idx] == fillVal)
+        #     mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(tRData1d[idx] >= tUThresh)
+        #     mtsRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(tRData1d[idx] <= tLThresh)
+        tdata = tRData1d
+        mtsRData1d |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * (tdata == fillVal).astype(np.int32)
+        mtsRData1d |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * (tdata >= tUThresh).astype(np.int32)
+        mtsRData1d |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * (tdata <= tLThresh).astype(np.int32)
 
         mRData1d[:] = 0
 
@@ -3336,10 +3363,11 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: spatial_convolve done", region_idx)
         logger.debug("[region %d] convolve_diff: background start", region_idx)
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                oRData1d[k + rPixX * l] += get_background_numpy(
-                    k, l, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+        # for l in range(hwKernel, rPixY - hwKernel):
+        #     for k in range(hwKernel, rPixX - hwKernel):
+        #         oRData1d[k + rPixX * l] += get_background_numpy(
+        #             k, l, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+        background_loop_jit(oRData1d, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel)
 
         logger.debug("[region %d] convolve_diff: background done", region_idx)
         logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
@@ -3362,15 +3390,22 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         else:
             tRData1d = make_noise_image4_numpy(iRData1d, 1.0 / iGain, iRdnoise / iGain, rPixX, rPixY)
 
-        for idx in range(rPixX * rPixY):
-            tRData1d[idx] = math.sqrt(float(tRData1d[idx]) + float(eRData1d[idx]))
+        # for idx in range(rPixX * rPixY):
+        #     tRData1d[idx] = math.sqrt(float(tRData1d[idx]) + float(eRData1d[idx]))
+        tRData1d = np.sqrt(tRData1d + eRData1d)
 
-        for idx in range(rPixX * rPixY):
-            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(iRData1d[idx] == fillVal)
-            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(iRData1d[idx] >= iUThresh)
-            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(iRData1d[idx] <= iLThresh)
-            mRData1d[idx] |= misRData1d[idx]
-            mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((misRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
+        # for idx in range(rPixX * rPixY):
+        #     mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(iRData1d[idx] == fillVal)
+        #     mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(iRData1d[idx] >= iUThresh)
+        #     mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(iRData1d[idx] <= iLThresh)
+        #     mRData1d[idx] |= misRData1d[idx]
+        #     mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((misRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
+        idata = iRData1d
+        mRData1d |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * (idata == fillVal).astype(np.int32)
+        mRData1d |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * (idata >= iUThresh).astype(np.int32)
+        mRData1d |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * (idata <= iLThresh).astype(np.int32)
+        mRData1d |= misRData1d
+        mRData1d |= FLAG_OUTPUT_ISBAD * ((misRData1d & FLAG_INPUT_ISBAD) > 0).astype(np.int32)
 
         logger.debug("[region %d] convolve_diff: noise_combine done", region_idx)
         if savexyflag:
@@ -3415,10 +3450,14 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         logger.debug("[region %d] convolve_diff: realloc+mask start", region_idx)
         oRData1d = np.full(rPixX * rPixY, fillVal, dtype=np.float32)
 
-        for idx in range(rPixX * rPixY):
-            misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(iRData1d[idx] == fillVal)
-            misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(iRData1d[idx] >= iUThresh)
-            misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(iRData1d[idx] <= iLThresh)
+        # for idx in range(rPixX * rPixY):
+        #     misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(iRData1d[idx] == fillVal)
+        #     misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(iRData1d[idx] >= iUThresh)
+        #     misRData1d[idx] |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(iRData1d[idx] <= iLThresh)
+        tdata = iRData1d
+        misRData1d |= (FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * (tdata == fillVal).astype(np.int32)
+        misRData1d |= (FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * (tdata >= iUThresh).astype(np.int32)
+        misRData1d |= (FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * (tdata <= iLThresh).astype(np.int32)
 
         mRData1d[:] = 0
 
@@ -3454,10 +3493,11 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: spatial_convolve done", region_idx)
         logger.debug("[region %d] convolve_diff: background start", region_idx)
-        for l in range(hwKernel, rPixY - hwKernel):
-            for k in range(hwKernel, rPixX - hwKernel):
-                oRData1d[k + rPixX * l] += get_background_numpy(
-                    k, l, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+        # for l in range(hwKernel, rPixY - hwKernel):
+        #     for k in range(hwKernel, rPixX - hwKernel):
+        #         oRData1d[k + rPixX * l] += get_background_numpy(
+        #             k, l, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+        background_loop_jit(oRData1d, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel)
 
         logger.debug("[region %d] convolve_diff: background done", region_idx)
         logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
@@ -3480,15 +3520,22 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         else:
             iRData1d = make_noise_image4_numpy(tRData1d, 1.0 / tGain, tRdnoise / tGain, rPixX, rPixY)
 
-        for idx in range(rPixX * rPixY):
-            iRData1d[idx] = math.sqrt(float(iRData1d[idx]) + float(eRData1d[idx]))
+        # for idx in range(rPixX * rPixY):
+        #     iRData1d[idx] = math.sqrt(float(iRData1d[idx]) + float(eRData1d[idx]))
+        iRData1d = np.sqrt(iRData1d + eRData1d)
 
-        for idx in range(rPixX * rPixY):
-            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(tRData1d[idx] == fillVal)
-            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(tRData1d[idx] >= tUThresh)
-            mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(tRData1d[idx] <= tLThresh)
-            mRData1d[idx] |= mtsRData1d[idx]
-            mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((mtsRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
+        # for idx in range(rPixX * rPixY):
+        #     mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * int(tRData1d[idx] == fillVal)
+        #     mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * int(tRData1d[idx] >= tUThresh)
+        #     mRData1d[idx] |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * int(tRData1d[idx] <= tLThresh)
+        #     mRData1d[idx] |= mtsRData1d[idx]
+        #     mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((mtsRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
+        tdata = tRData1d
+        mRData1d |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_BAD_PIXVAL) * (tdata == fillVal).astype(np.int32)
+        mRData1d |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_SAT_PIXEL) * (tdata >= tUThresh).astype(np.int32)
+        mRData1d |= (FLAG_OUTPUT_ISBAD | FLAG_INPUT_ISBAD | FLAG_LOW_PIXEL) * (tdata <= tLThresh).astype(np.int32)
+        mRData1d |= mtsRData1d
+        mRData1d |= FLAG_OUTPUT_ISBAD * ((mtsRData1d & FLAG_INPUT_ISBAD) > 0).astype(np.int32)
 
         logger.debug("[region %d] convolve_diff: noise_combine done", region_idx)
         if savexyflag:
