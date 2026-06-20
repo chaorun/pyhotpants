@@ -542,9 +542,12 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     work = np.sort(good_samples)
     nfound = len(work)
-
-    binsize = (work[int(ufstat * nfound)] - work[int(mfstat * nfound)]) / float(nstat)
-    bin1 = work[int(mfstat * nfound)] - 128.0 * binsize
+    if nfound > 0:
+        binsize = (work[int(ufstat * nfound)] - work[int(mfstat * nfound)]) / float(nstat)
+        bin1 = work[int(mfstat * nfound)] - 128.0 * binsize
+    else:
+        binsize = 0.0
+        bin1 = 0.0
 
     mRData_region = mRData_2d[y0Reg:y0Reg + nPixY, x0Reg:x0Reg + nPixX].ravel()
 
@@ -567,7 +570,9 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
     if len(sdat) == 0:
-        mode_val = work[int(mfstat * nfound)]
+        mode_val = 0.0
+        if nfound > 0:
+            mode_val = work[int(mfstat * nfound)]
         return {'sum': 0.0, 'mean': 0.0, 'median': mode_val, 'mode': mode_val,
                 'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
 
