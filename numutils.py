@@ -21,6 +21,82 @@ FLAG_I_SKIP = 0x800
 FLAG_OUTPUT_ISBAD = 0x8000
 
 
+class StampsArray:
+    def __init__(self, nS, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC):
+        fwSq = fwKSStamp * fwKSStamp
+        nVec = nCompKer + nBGVectors
+
+        self.nS = nS
+        self.nKSStamps = nKSStamps
+        self.fwKSStamp = fwKSStamp
+        self.nCompKer = nCompKer
+        self.nBGVectors = nBGVectors
+        self.nC = nC
+        self.fwSq = fwSq
+        self.nVec = nVec
+
+        self.sscnt   = np.zeros(nS, dtype=np.int32)
+        self.nss     = np.zeros(nS, dtype=np.int32)
+        self.x0      = np.zeros(nS, dtype=np.int32)
+        self.y0      = np.zeros(nS, dtype=np.int32)
+        self.x       = np.zeros(nS, dtype=np.int32)
+        self.y       = np.zeros(nS, dtype=np.int32)
+
+        self.xss     = np.zeros((nS, nKSStamps), dtype=np.int32)
+        self.yss     = np.zeros((nS, nKSStamps), dtype=np.int32)
+
+        self.vectors  = np.zeros((nS, nVec, fwSq), dtype=np.float64)
+        self.mat      = np.zeros((nS, nC, nC), dtype=np.float64)
+        self.scprod   = np.zeros((nS, nC), dtype=np.float64)
+        self.krefArea = np.zeros((nS, fwSq), dtype=np.float64)
+
+        self.chi2    = np.zeros(nS, dtype=np.float64)
+        self.norm    = np.zeros(nS, dtype=np.float64)
+        self.diff    = np.zeros(nS, dtype=np.float64)
+        self.sum_val = np.zeros(nS, dtype=np.float64)
+        self.mean_val = np.zeros(nS, dtype=np.float64)
+        self.median  = np.zeros(nS, dtype=np.float64)
+        self.mode    = np.zeros(nS, dtype=np.float64)
+        self.sd      = np.zeros(nS, dtype=np.float64)
+        self.fwhm    = np.zeros(nS, dtype=np.float64)
+        self.lfwhm   = np.zeros(nS, dtype=np.float64)
+
+        self.valid   = np.zeros(nS, dtype=np.bool_)
+        self.ntS     = 0
+
+    @staticmethod
+    def subset(src, mask):
+        nSub = mask.sum()
+        if nSub == 0:
+            return None
+        sa = StampsArray(nSub, src.nKSStamps, src.fwKSStamp, src.nCompKer, src.nBGVectors, src.nC)
+        sa.sscnt[:]     = src.sscnt[mask]
+        sa.nss[:]       = src.nss[mask]
+        sa.x0[:]        = src.x0[mask]
+        sa.y0[:]        = src.y0[mask]
+        sa.x[:]         = src.x[mask]
+        sa.y[:]         = src.y[mask]
+        sa.xss[:]       = src.xss[mask]
+        sa.yss[:]       = src.yss[mask]
+        sa.vectors[:]   = src.vectors[mask]
+        sa.mat[:]       = src.mat[mask]
+        sa.scprod[:]    = src.scprod[mask]
+        sa.krefArea[:]  = src.krefArea[mask]
+        sa.chi2[:]      = src.chi2[mask]
+        sa.norm[:]      = src.norm[mask]
+        sa.diff[:]      = src.diff[mask]
+        sa.sum_val[:]   = src.sum_val[mask]
+        sa.mean_val[:]  = src.mean_val[mask]
+        sa.median[:]    = src.median[mask]
+        sa.mode[:]      = src.mode[mask]
+        sa.sd[:]        = src.sd[mask]
+        sa.fwhm[:]      = src.fwhm[mask]
+        sa.lfwhm[:]     = src.lfwhm[mask]
+        sa.valid[:]     = src.valid[mask]
+        sa.ntS          = nSub
+        return sa
+
+
 def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
     """返回 (mean, stdev, return_code) — 矢量化版本"""
     count = len(data)
@@ -597,13 +673,19 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
             'sd': sd_val, 'fwhm': fwhm_val, 'lfwhm': lfwhm_val, 'return_code': 0}
 
 
-def cut_sstamp_numpy(stamp, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
-    stamp['krefArea'][:] = fillVal
+def cut_sstamp_numpy(sa, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
+    # def cut_sstamp_numpy(stamp, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
+    #     stamp['krefArea'][:] = fillVal
+    sa.krefArea[si, :] = fillVal
 
-    nss = stamp['nss']
-    sscnt = stamp['sscnt']
-    xStamp = int(stamp['xss'][sscnt]) - stamp['x0']
-    yStamp = int(stamp['yss'][sscnt]) - stamp['y0']
+    # nss = stamp['nss']
+    # sscnt = stamp['sscnt']
+    nss = sa.nss[si]
+    sscnt = sa.sscnt[si]
+    # xStamp = int(stamp['xss'][sscnt]) - stamp['x0']
+    xStamp = int(sa.xss[si, sscnt]) - sa.x0[si]
+    # yStamp = int(stamp['yss'][sscnt]) - stamp['y0']
+    yStamp = int(sa.yss[si, sscnt]) - sa.y0[si]
 
     if sscnt >= nss:
         return 1
@@ -611,19 +693,23 @@ def cut_sstamp_numpy(stamp, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData,
     sumVal = 0.0
     for j in range(yStamp - hwKSStamp, yStamp + hwKSStamp + 1):
         y = j - (yStamp - hwKSStamp)
-        dy = j + stamp['y0']
+        # dy = j + stamp['y0']
+        dy = j + sa.y0[si]
 
         for i in range(xStamp - hwKSStamp, xStamp + hwKSStamp + 1):
             x = i - (xStamp - hwKSStamp)
 
-            k = i + stamp['x0'] + rPixX * dy
+            # k = i + stamp['x0'] + rPixX * dy
+            k = i + sa.x0[si] + rPixX * dy
             dpt = float(iData[k])
 
-            stamp['krefArea'][x + y * fwKSStamp] = dpt
+            # stamp['krefArea'][x + y * fwKSStamp] = dpt
+            sa.krefArea[si, x + y * fwKSStamp] = dpt
             if not (int(mRData[k]) & FLAG_INPUT_ISBAD):
                 sumVal += abs(dpt)
 
-    stamp['sum'] = sumVal
+    # stamp['sum'] = sumVal
+    sa.sum_val[si] = sumVal
     return 0
 
 
@@ -705,26 +791,35 @@ def quick_sort_recurse(listArr, index, leftEnd, rightEnd):
         quick_sort_recurse(listArr, index, i, rightEnd)
 
 
-def get_psf_centers_numpy(stamp, iData, xLen, yLen, hiThresh, bbit1, bbit2,
+def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
                            nKSStamps, hwKSStamp, rPixX, mRData, kerFitThresh,
                            verbose=0):
+    # def get_psf_centers_numpy(stamp, iData, xLen, yLen, hiThresh, bbit1, bbit2,
+    #                            nKSStamps, hwKSStamp, rPixX, mRData, kerFitThresh,
+    #                            verbose=0):
     kerFitThresh = float(np.float32(kerFitThresh))
     dfrac = 0.9
 
-    if stamp['nss'] >= nKSStamps:
+    # if stamp['nss'] >= nKSStamps:
+    if sa.nss[si] >= nKSStamps:
         return 0
 
     bbit = bbit1 | bbit2 | 0xbf
-    sky = stamp['mode']
-    invdsky = 1.0 / stamp['fwhm']
+    # sky = stamp['mode']
+    sky = sa.mode[si]
+    # invdsky = 1.0 / stamp['fwhm']
+    invdsky = 1.0 / sa.fwhm[si]
 
-    sx0 = stamp['x0']
-    sy0 = stamp['y0']
+    # sx0 = stamp['x0']
+    sx0 = sa.x0[si]
+    # sy0 = stamp['y0']
+    sy0 = sa.y0[si]
 
     xbuffer = 0
     ybuffer = 0
 
-    floorVal = sky + kerFitThresh * stamp['fwhm']
+    # floorVal = sky + kerFitThresh * stamp['fwhm']
+    floorVal = sky + kerFitThresh * sa.fwhm[si]
 
     allocSize = max(1, (xLen * yLen) // hwKSStamp)
     xloc = [0] * allocSize
@@ -833,25 +928,36 @@ def get_psf_centers_numpy(stamp, iData, xLen, yLen, hiThresh, bbit1, bbit2,
         return 1
     else:
         qs = quick_sort_impl(peaks, pcnt)
-        nssOrig = stamp['nss']
+        # nssOrig = stamp['nss']
+        nssOrig = sa.nss[si]
         idx = nssOrig
         jj = 0
         while jj < pcnt and idx < nKSStamps:
-            stamp['xss'][idx] = xloc[qs[pcnt - jj - 1]] + sx0
-            stamp['yss'][idx] = yloc[qs[pcnt - jj - 1]] + sy0
-            stamp['nss'] += 1
+            # stamp['xss'][idx] = xloc[qs[pcnt - jj - 1]] + sx0
+            sa.xss[si, idx] = xloc[qs[pcnt - jj - 1]] + sx0
+            # stamp['yss'][idx] = yloc[qs[pcnt - jj - 1]] + sy0
+            sa.yss[si, idx] = yloc[qs[pcnt - jj - 1]] + sy0
+            # stamp['nss'] += 1
+            sa.nss[si] += 1
             idx += 1
             jj += 1
         return 0
 
 
 def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
-                        getCenters, rXBMin, rYBMin, ciStamps, ctStamps,
+                        getCenters, rXBMin, rYBMin, ciSa, ctSa,
                         iRData1d, tRData1d, hardX, hardY,
                         verbose, forceConvolve, rPixX, rPixY,
                         tUKThresh, iUKThresh, hwKSStamp,
                         fwStamp, nKSStamps, kerFitThresh,
                         mRData1d, statSig):
+    # def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
+    #                         getCenters, rXBMin, rYBMin, ciStamps, ctStamps,
+    #                         iRData1d, tRData1d, hardX, hardY,
+    #                         verbose, forceConvolve, rPixX, rPixY,
+    #                         tUKThresh, iUKThresh, hwKSStamp,
+    #                         fwStamp, nKSStamps, kerFitThresh,
+    #                         mRData1d, statSig):
     sPixX = sXMax - sXMin + 1
     sPixY = sYMax - sYMin + 1
 
@@ -863,60 +969,91 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
     mRData2d = mRData1d.reshape(rPixY, rPixX)
 
     if forceConvolve != "i":
-        if ctStamps[ntS]['nss'] == 0:
+        # if ctStamps[ntS]['nss'] == 0:
+        if ctSa.nss[ntS] == 0:
             refArea, x0, y0, cx, cy = cut_stamp_numpy(
                 tRData1d, rPixX,
                 sXMin - rXBMin, sYMin - rYBMin,
                 sXMax - rXBMin, sYMax - rYBMin)
-            ctStamps[ntS]['x0'] = x0
-            ctStamps[ntS]['y0'] = y0
-            ctStamps[ntS]['x'] = cx
-            ctStamps[ntS]['y'] = cy
+            # ctStamps[ntS]['x0'] = x0
+            ctSa.x0[ntS] = x0
+            # ctStamps[ntS]['y0'] = y0
+            ctSa.y0[ntS] = y0
+            # ctStamps[ntS]['x'] = cx
+            ctSa.x[ntS] = cx
+            # ctStamps[ntS]['y'] = cy
+            ctSa.y[ntS] = cy
 
             refArea2d = refArea.reshape(sPixY, sPixX).astype(np.float32)
             result = get_stamp_stats3_numpy(
-                refArea2d, ctStamps[ntS]['x0'], ctStamps[ntS]['y0'],
+                # refArea2d, ctStamps[ntS]['x0'], ctStamps[ntS]['y0'],
+                refArea2d, ctSa.x0[ntS], ctSa.y0[ntS],
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
             if result['return_code'] == 0:
-                ctStamps[ntS]['sum'] = result['sum']
-                ctStamps[ntS]['mean'] = result['mean']
-                ctStamps[ntS]['median'] = result['median']
-                ctStamps[ntS]['mode'] = result['mode']
-                ctStamps[ntS]['sd'] = result['sd']
-                ctStamps[ntS]['fwhm'] = result['fwhm']
-                ctStamps[ntS]['lfwhm'] = result['lfwhm']
+                # ctStamps[ntS]['sum'] = result['sum']
+                ctSa.sum_val[ntS] = result['sum']
+                # ctStamps[ntS]['mean'] = result['mean']
+                ctSa.mean_val[ntS] = result['mean']
+                # ctStamps[ntS]['median'] = result['median']
+                ctSa.median[ntS] = result['median']
+                # ctStamps[ntS]['mode'] = result['mode']
+                ctSa.mode[ntS] = result['mode']
+                # ctStamps[ntS]['sd'] = result['sd']
+                ctSa.sd[ntS] = result['sd']
+                # ctStamps[ntS]['fwhm'] = result['fwhm']
+                ctSa.fwhm[ntS] = result['fwhm']
+                # ctStamps[ntS]['lfwhm'] = result['lfwhm']
+                ctSa.lfwhm[ntS] = result['lfwhm']
 
     if forceConvolve != "t":
-        if ciStamps[niS]['nss'] == 0:
+        # if ciStamps[niS]['nss'] == 0:
+        if ciSa.nss[niS] == 0:
             refArea, x0, y0, cx, cy = cut_stamp_numpy(
                 iRData1d, rPixX,
                 sXMin - rXBMin, sYMin - rYBMin,
                 sXMax - rXBMin, sYMax - rYBMin)
-            ciStamps[niS]['x0'] = x0
-            ciStamps[niS]['y0'] = y0
-            ciStamps[niS]['x'] = cx
-            ciStamps[niS]['y'] = cy
+            # ciStamps[niS]['x0'] = x0
+            ciSa.x0[niS] = x0
+            # ciStamps[niS]['y0'] = y0
+            ciSa.y0[niS] = y0
+            # ciStamps[niS]['x'] = cx
+            ciSa.x[niS] = cx
+            # ciStamps[niS]['y'] = cy
+            ciSa.y[niS] = cy
 
             refArea2d = refArea.reshape(sPixY, sPixX).astype(np.float32)
             result = get_stamp_stats3_numpy(
-                refArea2d, ciStamps[niS]['x0'], ciStamps[niS]['y0'],
+                # refArea2d, ciStamps[niS]['x0'], ciStamps[niS]['y0'],
+                refArea2d, ciSa.x0[niS], ciSa.y0[niS],
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
             if result['return_code'] == 0:
-                ciStamps[niS]['sum'] = result['sum']
-                ciStamps[niS]['mean'] = result['mean']
-                ciStamps[niS]['median'] = result['median']
-                ciStamps[niS]['mode'] = result['mode']
-                ciStamps[niS]['sd'] = result['sd']
-                ciStamps[niS]['fwhm'] = result['fwhm']
-                ciStamps[niS]['lfwhm'] = result['lfwhm']
+                # ciStamps[niS]['sum'] = result['sum']
+                ciSa.sum_val[niS] = result['sum']
+                # ciStamps[niS]['mean'] = result['mean']
+                ciSa.mean_val[niS] = result['mean']
+                # ciStamps[niS]['median'] = result['median']
+                ciSa.median[niS] = result['median']
+                # ciStamps[niS]['mode'] = result['mode']
+                ciSa.mode[niS] = result['mode']
+                # ciStamps[niS]['sd'] = result['sd']
+                ciSa.sd[niS] = result['sd']
+                # ciStamps[niS]['fwhm'] = result['fwhm']
+                ciSa.fwhm[niS] = result['fwhm']
+                # ciStamps[niS]['lfwhm'] = result['lfwhm']
+                ciSa.lfwhm[niS] = result['lfwhm']
 
     if forceConvolve != "i":
-        nss = ctStamps[ntS]['nss']
+        # nss = ctStamps[ntS]['nss']
+        nss = ctSa.nss[ntS]
         if getCenters:
+            # get_psf_centers_numpy(
+            #     ctStamps[ntS], tRData1d, sPixX, sPixY,
+            #     tUKThresh, bbitt1, bbitt2, nKSStamps,
+            #     hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
             get_psf_centers_numpy(
-                ctStamps[ntS], tRData1d, sPixX, sPixY,
+                ctSa, ntS, tRData1d, sPixX, sPixY,
                 tUKThresh, bbitt1, bbitt2, nKSStamps,
                 hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
         else:
@@ -933,13 +1070,18 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
 
                 check = check_psf_center_numpy(
                     tRData1d,
-                    xmax - ctStamps[ntS]['x0'],
-                    ymax - ctStamps[ntS]['y0'],
+                    # xmax - ctStamps[ntS]['x0'],
+                    xmax - ctSa.x0[ntS],
+                    # ymax - ctStamps[ntS]['y0'],
+                    ymax - ctSa.y0[ntS],
                     sPixX, sPixY,
-                    ctStamps[ntS]['x0'], ctStamps[ntS]['y0'],
+                    # ctStamps[ntS]['x0'], ctStamps[ntS]['y0'],
+                    ctSa.x0[ntS], ctSa.y0[ntS],
                     tUKThresh,
-                    ctStamps[ntS]['mode'],
-                    1.0 / ctStamps[ntS]['fwhm'],
+                    # ctStamps[ntS]['mode'],
+                    ctSa.mode[ntS],
+                    # 1.0 / ctStamps[ntS]['fwhm'],
+                    1.0 / ctSa.fwhm[ntS],
                     0, 0,
                     bbitt1 | bbitt2 | 0xbf, bbitt1,
                     rPixX, hwKSStamp, mRData1d, kerFitThresh)
@@ -951,15 +1093,23 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                             if nr2 >= 0 and nr2 < rPixX * rPixY:
                                 mRData1d[nr2] = int(mRData1d[nr2]) | bbitt2
 
-                    ctStamps[ntS]['xss'][nss] = xmax
-                    ctStamps[ntS]['yss'][nss] = ymax
-                    ctStamps[ntS]['nss'] += 1
+                    # ctStamps[ntS]['xss'][nss] = xmax
+                    ctSa.xss[ntS, nss] = xmax
+                    # ctStamps[ntS]['yss'][nss] = ymax
+                    ctSa.yss[ntS, nss] = ymax
+                    # ctStamps[ntS]['nss'] += 1
+                    ctSa.nss[ntS] += 1
 
     if forceConvolve != "t":
-        nss = ciStamps[niS]['nss']
+        # nss = ciStamps[niS]['nss']
+        nss = ciSa.nss[niS]
         if getCenters:
+            # get_psf_centers_numpy(
+            #     ciStamps[niS], iRData1d, sPixX, sPixY,
+            #     iUKThresh, bbiti1, bbiti2, nKSStamps,
+            #     hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
             get_psf_centers_numpy(
-                ciStamps[niS], iRData1d, sPixX, sPixY,
+                ciSa, niS, iRData1d, sPixX, sPixY,
                 iUKThresh, bbiti1, bbiti2, nKSStamps,
                 hwKSStamp, rPixX, mRData1d, kerFitThresh, verbose)
         else:
@@ -976,13 +1126,18 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
 
                 check = check_psf_center_numpy(
                     iRData1d,
-                    xmax - ciStamps[niS]['x0'],
-                    ymax - ciStamps[niS]['y0'],
+                    # xmax - ciStamps[niS]['x0'],
+                    xmax - ciSa.x0[niS],
+                    # ymax - ciStamps[niS]['y0'],
+                    ymax - ciSa.y0[niS],
                     sPixX, sPixY,
-                    ciStamps[niS]['x0'], ciStamps[niS]['y0'],
+                    # ciStamps[niS]['x0'], ciStamps[niS]['y0'],
+                    ciSa.x0[niS], ciSa.y0[niS],
                     iUKThresh,
-                    ciStamps[niS]['mode'],
-                    1.0 / ciStamps[niS]['fwhm'],
+                    # ciStamps[niS]['mode'],
+                    ciSa.mode[niS],
+                    # 1.0 / ciStamps[niS]['fwhm'],
+                    1.0 / ciSa.fwhm[niS],
                     0, 0,
                     bbiti1 | bbiti2 | 0xbf, bbiti1,
                     rPixX, hwKSStamp, mRData1d, kerFitThresh)
@@ -994,9 +1149,12 @@ def build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                             if nr2 >= 0 and nr2 < rPixX * rPixY:
                                 mRData1d[nr2] = int(mRData1d[nr2]) | bbiti2
 
-                    ciStamps[niS]['xss'][nss] = xmax
-                    ciStamps[niS]['yss'][nss] = ymax
-                    ciStamps[niS]['nss'] += 1
+                    # ciStamps[niS]['xss'][nss] = xmax
+                    # ciStamps[niS]['yss'][nss] = ymax
+                    # ciStamps[niS]['nss'] += 1
+                    ciSa.xss[niS, nss] = xmax
+                    ciSa.yss[niS, nss] = ymax
+                    ciSa.nss[niS] += 1
 
 
 def get_background_numpy(xi, yi, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY):
@@ -1039,9 +1197,12 @@ def background_loop_jit(oRData1d, kernelSol, nCompKer, kerOrder, bgOrder, rPixX,
             oRData1d[i + rPixX * j] += bg
 
 
-def get_final_stamp_sig_numpy(stamp, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
-    xRegion = int(stamp['xss'][stamp['sscnt']])
-    yRegion = int(stamp['yss'][stamp['sscnt']])
+def get_final_stamp_sig_numpy(sa, si, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
+    # def get_final_stamp_sig_numpy(stamp, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
+    # xRegion = int(stamp['xss'][stamp['sscnt']])
+    xRegion = int(sa.xss[si, sa.sscnt[si]])
+    # yRegion = int(stamp['yss'][stamp['sscnt']])
+    yRegion = int(sa.yss[si, sa.sscnt[si]])
     sig = 0.0
     nsig = 0
     for j in range(fwKSStamp):
@@ -1274,16 +1435,22 @@ def xy_conv_stamp_numpy(stamp, image, n, ren, usePCA, fwKSStamp, fwKernel,
             stamp['vectors'][n][i] -= stamp['vectors'][0][i]
 
 
-def xy_conv_stamp_fast_numpy(stamp, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
+def xy_conv_stamp_fast_numpy(sa, si, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
                               hwKSStamp, hwKernel, rPixX, filterX, filterY, temp, PCA):
+    # def xy_conv_stamp_fast_numpy(stamp, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
+    #                               hwKSStamp, hwKernel, rPixX, filterX, filterY, temp, PCA):
     if usePCA:
         for n in range(nvecTotal):
-            xy_conv_stamp_pca_numpy(stamp, image, n, renFlags[n], fwKSStamp, hwKSStamp,
+            # xy_conv_stamp_pca_numpy(stamp, image, n, renFlags[n], fwKSStamp, hwKSStamp,
+            #                         hwKernel, fwKernel, rPixX, PCA)
+            xy_conv_stamp_pca_numpy(sa, si, image, n, renFlags[n], fwKSStamp, hwKSStamp,
                                     hwKernel, fwKernel, rPixX, PCA)
         return
 
-    xi = int(stamp['xss'][stamp['sscnt']])
-    yi = int(stamp['yss'][stamp['sscnt']])
+    # xi = int(stamp['xss'][stamp['sscnt']])
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    # yi = int(stamp['yss'][stamp['sscnt']])
+    yi = int(sa.yss[si, sa.sscnt[si]])
 
     iCenters = np.arange(xi - hwKSStamp, xi + hwKSStamp + 1)
     jCenters = np.arange(yi - hwKSStamp, yi + hwKSStamp + 1)
@@ -1311,27 +1478,35 @@ def xy_conv_stamp_fast_numpy(stamp, image, nvecTotal, renFlags, usePCA, fwKSStam
     for n in range(nvecTotal):
         if renFlags[n]:
             result[n] -= result[0]
-        stamp['vectors'][n][:fwKSStamp * fwKSStamp] = result[n]
+        # stamp['vectors'][n][:fwKSStamp * fwKSStamp] = result[n]
+        sa.vectors[si, n, :fwKSStamp * fwKSStamp] = result[n]
 
 
-def xy_conv_stamp_pca_numpy(stamp, image, n, ren, fwKSStamp, hwKSStamp,
+def xy_conv_stamp_pca_numpy(sa, si, image, n, ren, fwKSStamp, hwKSStamp,
                              hwKernel, fwKernel, rPixX, PCA):
-    xi = int(stamp['xss'][stamp['sscnt']])
-    yi = int(stamp['yss'][stamp['sscnt']])
+    # def xy_conv_stamp_pca_numpy(stamp, image, n, ren, fwKSStamp, hwKSStamp,
+    #                              hwKernel, fwKernel, rPixX, PCA):
+    # xi = int(stamp['xss'][stamp['sscnt']])
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    # yi = int(stamp['yss'][stamp['sscnt']])
+    yi = int(sa.yss[si, sa.sscnt[si]])
 
     for j in range(yi - hwKSStamp, yi + hwKSStamp + 1):
         for i in range(xi - hwKSStamp, xi + hwKSStamp + 1):
             xij = i - (xi - hwKSStamp) + fwKSStamp * (j - (yi - hwKSStamp))
-            stamp['vectors'][n][xij] = 0.0
+            # stamp['vectors'][n][xij] = 0.0
+            sa.vectors[si, n, xij] = 0.0
             for yc in range(-hwKernel, hwKernel + 1):
                 for xc in range(-hwKernel, hwKernel + 1):
                     val_img = np.float32(image[(i + xc) + rPixX * (j + yc)])
                     val_pca = np.float32(PCA[n][(xc + hwKernel) + fwKernel * (yc + hwKernel)])
-                    stamp['vectors'][n][xij] += float(val_img * val_pca)
+                    # stamp['vectors'][n][xij] += float(val_img * val_pca)
+                    sa.vectors[si, n, xij] += float(val_img * val_pca)
 
     if ren:
         for i in range(fwKSStamp * fwKSStamp):
-            stamp['vectors'][n][i] -= stamp['vectors'][0][i]
+            # stamp['vectors'][n][i] -= stamp['vectors'][0][i]
+            sa.vectors[si, n, i] -= sa.vectors[si, 0, i]
 
 
 # def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
@@ -1452,8 +1627,10 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                 matrix[ii + 1, ncomp + jbg + 2] += q
 
 
-def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
-    build_matrix0_jit(stamp['vectors'], stamp['mat'], nCompKer, kerOrder, bgOrder, fwKSStamp)
+def build_matrix0_numpy(sa, si, nCompKer, kerOrder, bgOrder, fwKSStamp):
+    # def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
+    #     build_matrix0_jit(stamp['vectors'], stamp['mat'], nCompKer, kerOrder, bgOrder, fwKSStamp)
+    build_matrix0_jit(sa.vectors[si], sa.mat[si], nCompKer, kerOrder, bgOrder, fwKSStamp)
 
 
 # def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
@@ -1529,16 +1706,23 @@ def build_scprod_jit(all_vectors, all_scprod, valid_mask, all_x, all_y,
             kernelSol[ncomp + ibg + 2] += q
 
 
-def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
+def build_scprod0_numpy(sa, si, image, nCompKer, kerOrder, bgOrder,
                          fwKSStamp, hwKSStamp, rPixX):
-    xi = int(stamp['xss'][stamp['sscnt']])
-    yi = int(stamp['yss'][stamp['sscnt']])
+    # def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
+    #                          fwKSStamp, hwKSStamp, rPixX):
+    # xi = int(stamp['xss'][stamp['sscnt']])
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    # yi = int(stamp['yss'][stamp['sscnt']])
+    yi = int(sa.yss[si, sa.sscnt[si]])
     image_arr = np.asarray(image, dtype=np.float64)
-    build_scprod0_jit(stamp['vectors'], stamp['scprod'], image_arr,
+    # build_scprod0_jit(stamp['vectors'], stamp['scprod'], image_arr,
+    #                   nCompKer, xi, yi, fwKSStamp, hwKSStamp, rPixX)
+    build_scprod0_jit(sa.vectors[si], sa.scprod[si], image_arr,
                       nCompKer, xi, yi, fwKSStamp, hwKSStamp, rPixX)
 
 
-def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
+def build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
+    # def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
@@ -1546,34 +1730,48 @@ def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp,
     pixStamp = fwKSStamp * fwKSStamp
     mat_size = ncomp1 * ncomp2 + nbg_vec + 1
 
-    valid_mask = np.zeros(nS, dtype=np.int32)
-    all_x = np.zeros(nS, dtype=np.int64)
-    all_y = np.zeros(nS, dtype=np.int64)
-    n_valid = 0
-    for i in range(nS):
-        if stamps_dicts[i]['sscnt'] < stamps_dicts[i]['nss']:
-            valid_mask[i] = 1
-            sscnt = stamps_dicts[i]['sscnt']
-            all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
-            all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
-            n_valid += 1
-
+    # valid_mask = np.zeros(nS, dtype=np.int32)
+    # all_x = np.zeros(nS, dtype=np.int64)
+    # all_y = np.zeros(nS, dtype=np.int64)
+    # n_valid = 0
+    # for i in range(nS):
+    #     if stamps_dicts[i]['sscnt'] < stamps_dicts[i]['nss']:
+    #         valid_mask[i] = 1
+    #         sscnt = stamps_dicts[i]['sscnt']
+    #         all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
+    #         all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
+    #         n_valid += 1
+    valid_mask = (sa.sscnt < sa.nss).astype(np.int32)
+    n_valid = valid_mask.sum()
     if n_valid == 0:
         for i in range(nS):
             for j in range(ncomp2):
                 wxy[i, j] = 0.0
         matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
         return matrix
+    safe_sscnt = np.clip(sa.sscnt, 0, sa.nKSStamps - 1)
+    all_x = np.where(valid_mask, sa.xss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    all_y = np.where(valid_mask, sa.yss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
-    nC = stamps_dicts[0]['mat'].shape[0]
+    # if n_valid == 0:
+    #     for i in range(nS):
+    #         for j in range(ncomp2):
+    #             wxy[i, j] = 0.0
+    #     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
+    #     return matrix
+
+    # nC = stamps_dicts[0]['mat'].shape[0]
+    nC = sa.nC
     nC_valid = nCompKer + 1
-    all_mat = np.zeros((nS, nC_valid, nC_valid), dtype=np.float64)
+    # all_mat = np.zeros((nS, nC_valid, nC_valid), dtype=np.float64)
+    all_mat = sa.mat[:, :nC_valid, :nC_valid].copy()
     nvec_total = nCompKer + nbg_vec
-    all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
-    for i in range(nS):
-        if valid_mask[i]:
-            all_mat[i] = stamps_dicts[i]['mat'][:nC_valid, :nC_valid]
-            all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
+    # all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
+    all_vectors = sa.vectors[:, :nvec_total, :].copy()
+    # for i in range(nS):
+    #     if valid_mask[i]:
+    #         all_mat[i] = stamps_dicts[i]['mat'][:nC_valid, :nC_valid]
+    #         all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
 
     wxy.fill(0.0)
     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
@@ -1682,35 +1880,45 @@ def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp,
 #     return matrix
 
 
-def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
+def build_scprod_numpy(sa, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
+    # def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
     pixStamp = fwKSStamp * fwKSStamp
 
-    valid_mask = np.zeros(nS, dtype=np.int32)
-    all_x = np.zeros(nS, dtype=np.int64)
-    all_y = np.zeros(nS, dtype=np.int64)
-    n_valid = 0
-    for i in range(nS):
-        if stamps_dicts[i]['sscnt'] < stamps_dicts[i]['nss']:
-            valid_mask[i] = 1
-            sscnt = stamps_dicts[i]['sscnt']
-            all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
-            all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
-            n_valid += 1
-
+    # valid_mask = np.zeros(nS, dtype=np.int32)
+    # all_x = np.zeros(nS, dtype=np.int64)
+    # all_y = np.zeros(nS, dtype=np.int64)
+    # n_valid = 0
+    # for i in range(nS):
+    #     if stamps_dicts[i]['sscnt'] < stamps_dicts[i]['nss']:
+    #         valid_mask[i] = 1
+    #         sscnt = stamps_dicts[i]['sscnt']
+    #         all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
+    #         all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
+    #         n_valid += 1
+    valid_mask = (sa.sscnt < sa.nss).astype(np.int32)
+    n_valid = valid_mask.sum()
     if n_valid == 0:
         return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+    safe_sscnt = np.clip(sa.sscnt, 0, sa.nKSStamps - 1)
+    all_x = np.where(valid_mask, sa.xss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    all_y = np.where(valid_mask, sa.yss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
-    all_scprod = np.zeros((nS, nCompKer + 1), dtype=np.float64)
+    # if n_valid == 0:
+    #     return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+
+    # all_scprod = np.zeros((nS, nCompKer + 1), dtype=np.float64)
+    all_scprod = sa.scprod[:, :nCompKer + 1].copy()
     nvec_total = nCompKer + nbg_vec
-    all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
-    for i in range(nS):
-        if valid_mask[i]:
-            all_scprod[i] = stamps_dicts[i]['scprod'][:nCompKer + 1]
-            all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
+    # all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
+    all_vectors = sa.vectors[:, :nvec_total, :].copy()
+    # for i in range(nS):
+    #     if valid_mask[i]:
+    #         all_scprod[i] = stamps_dicts[i]['scprod'][:nCompKer + 1]
+    #         all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
 
     image_arr = np.asarray(image, dtype=np.float64)
     kernelSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
@@ -1794,13 +2002,17 @@ def make_model_jit(vectors, kernelSol, csModel, rPixX, rPixY, nCompKer, kerOrder
             csModel[i] += coeff * vectors[i1, i]
 
 
-def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
-    xi = int(stamp['xss'][stamp['sscnt']])
-    yi = int(stamp['yss'][stamp['sscnt']])
+def make_model_numpy(sa, si, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
+    # def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
+    # xi = int(stamp['xss'][stamp['sscnt']])
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    # yi = int(stamp['yss'][stamp['sscnt']])
+    yi = int(sa.yss[si, sa.sscnt[si]])
 
     fwSq = fwKSStamp * fwKSStamp
     csModel = np.zeros(fwSq, dtype=np.float64)
-    vectors = np.asarray(stamp['vectors'], dtype=np.float64)
+    # vectors = np.asarray(stamp['vectors'], dtype=np.float64)
+    vectors = np.asarray(sa.vectors[si], dtype=np.float64)
     kSol = np.asarray(kernelSol, dtype=np.float64)
     make_model_jit(vectors, kSol, csModel, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp,
                    xi, yi)
@@ -1841,13 +2053,17 @@ def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSSta
 #     return csModel
 
 
-def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+def fill_stamp_numpy(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
+    # def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+    #                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+    #                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
     rPixX2 = float(np.float32(0.5 * rPixX))
     rPixY2 = float(np.float32(0.5 * rPixY))
 
-    if stamp_dict['sscnt'] >= stamp_dict['nss']:
+    # if stamp_dict['sscnt'] >= stamp_dict['nss']:
+    if sa.sscnt[si] >= sa.nss[si]:
         return 1
 
     sub_width = fwKSStamp + fwKernel - 1
@@ -1868,15 +2084,21 @@ def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, d
                 #                     rPixX, filter_x, filter_y, temp, PCA)
                 renFlags.append(ren)
                 nvec += 1
-    xy_conv_stamp_fast_numpy(stamp_dict, imConv, nvec, renFlags, usePCA,
+    # xy_conv_stamp_fast_numpy(stamp_dict, imConv, nvec, renFlags, usePCA,
+    #                           fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+    #                           rPixX, filter_x, filter_y, temp, PCA)
+    xy_conv_stamp_fast_numpy(sa, si, imConv, nvec, renFlags, usePCA,
                               fwKSStamp, fwKernel, hwKSStamp, hwKernel,
                               rPixX, filter_x, filter_y, temp, PCA)
 
-    if cut_sstamp_numpy(stamp_dict, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
+    # if cut_sstamp_numpy(stamp_dict, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
+    if cut_sstamp_numpy(sa, si, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
         return 1
 
-    xi = int(stamp_dict['xss'][stamp_dict['sscnt']])
-    yi = int(stamp_dict['yss'][stamp_dict['sscnt']])
+    # xi = int(stamp_dict['xss'][stamp_dict['sscnt']])
+    xi = int(sa.xss[si, sa.sscnt[si]])
+    # yi = int(stamp_dict['yss'][stamp_dict['sscnt']])
+    yi = int(sa.yss[si, sa.sscnt[si]])
     di = xi - hwKSStamp
     dj = yi - hwKSStamp
     for i in range(xi - hwKSStamp, xi + hwKSStamp + 1):
@@ -1888,13 +2110,16 @@ def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, d
             for idegx in range(bgOrder + 1):
                 ay = 1.0
                 for idegy in range(bgOrder - idegx + 1):
-                    stamp_dict['vectors'][nv][i - di + fwKSStamp * (j - dj)] = ax * ay
+                    # stamp_dict['vectors'][nv][i - di + fwKSStamp * (j - dj)] = ax * ay
+                    sa.vectors[si, nv, i - di + fwKSStamp * (j - dj)] = ax * ay
                     ay *= yf
                     nv += 1
                 ax *= xf
 
-    build_matrix0_numpy(stamp_dict, nCompKer, kerOrder, bgOrder, fwKSStamp)
-    build_scprod0_numpy(stamp_dict, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
+    # build_matrix0_numpy(stamp_dict, nCompKer, kerOrder, bgOrder, fwKSStamp)
+    build_matrix0_numpy(sa, si, nCompKer, kerOrder, bgOrder, fwKSStamp)
+    # build_scprod0_numpy(stamp_dict, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
+    build_scprod0_numpy(sa, si, imRef, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX)
 
     return 0
 
@@ -1985,14 +2210,21 @@ def get_stamp_sig_jit(vectors, kernelSol, imNoise, mRData1d, im,
     return (sig1, sig2, sig3, nsig)
 
 
-def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
+def get_stamp_sig_numpy(sa, si, kernelSol, imNoise, fwKSStamp, hwKSStamp,
                         rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder):
-    sscnt = stamp_dict['sscnt']
-    xRegion = int(stamp_dict['xss'][sscnt])
-    yRegion = int(stamp_dict['yss'][sscnt])
+    # def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
+    #                         rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder):
+    # sscnt = stamp_dict['sscnt']
+    sscnt = sa.sscnt[si]
+    # xRegion = int(stamp_dict['xss'][sscnt])
+    xRegion = int(sa.xss[si, sscnt])
+    # yRegion = int(stamp_dict['yss'][sscnt])
+    yRegion = int(sa.yss[si, sscnt])
 
-    im = stamp_dict['krefArea']
-    vectors = np.asarray(stamp_dict['vectors'], dtype=np.float64)
+    # im = stamp_dict['krefArea']
+    im = sa.krefArea[si]
+    # vectors = np.asarray(stamp_dict['vectors'], dtype=np.float64)
+    vectors = np.asarray(sa.vectors[si], dtype=np.float64)
     kSol = np.asarray(kernelSol, dtype=np.float64)
     imNoiseArr = np.asarray(imNoise, dtype=np.float64)
     mRDataArr = np.asarray(mRData, dtype=np.int64)
@@ -2605,10 +2837,14 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
     return vData
 
 
-def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgOrder,
+def check_stamps_numpy(sa, nS, imRef, imNoise, nCompKer, kerOrder, bgOrder,
                        nCompTotal, verbose, forceConvolve, figMerit,
                        kerSigReject, statSig, fwKSStamp, hwKSStamp,
                        rPixX, rPixY, fwKernel, kernel_vec, mRData):
+    # def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgOrder,
+    #                        nCompTotal, verbose, forceConvolve, figMerit,
+    #                        kerSigReject, statSig, fwKSStamp, hwKSStamp,
+    #                        rPixX, rPixY, fwKernel, kernel_vec, mRData):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
@@ -2626,9 +2862,11 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
         # indx = np.zeros(nComps + 1, dtype=np.int32)
 
         for im in range(1, nComps + 1):
-            check_vec[im] = stamps_dicts[i]['scprod'][im]
+            # check_vec[im] = stamps_dicts[i]['scprod'][im]
+            check_vec[im] = sa.scprod[i, im]
             for jm in range(1, im + 1):
-                check_mat[im, jm] = stamps_dicts[i]['mat'][im, jm]
+                # check_mat[im, jm] = stamps_dicts[i]['mat'][im, jm]
+                check_mat[im, jm] = sa.mat[i, im, jm]
                 check_mat[jm, im] = check_mat[im, jm]
 
         # d = 0.0
@@ -2638,34 +2876,44 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
             check_mat[1:nComps+1, 1:nComps+1], check_vec[1:nComps+1])
 
         sum_val = check_vec[1]
-        stamps_dicts[i]['norm'] = sum_val
+        # stamps_dicts[i]['norm'] = sum_val
+        sa.norm[i] = sum_val
         ks[nks] = sum_val
         nks += 1
 
     kmean, kstdev, sc_rc = sigma_clip_numpy(ks[:nks], maxiter=10, stat_sig=statSig)
 
     for i in range(nS):
-        stamps_dicts[i]['diff'] = abs((stamps_dicts[i]['norm'] - kmean) / kstdev)
+        # stamps_dicts[i]['diff'] = abs((stamps_dicts[i]['norm'] - kmean) / kstdev)
+        sa.diff[i] = abs((sa.norm[i] - kmean) / kstdev)
 
     if forceConvolve[0:1] == "b":
-        ntestStamps = 0
-        for i in range(nS):
-            if stamps_dicts[i]['diff'] < kerSigReject:
-                ntestStamps += 1
-
-        testStamps = []
-        for i in range(nS):
-            if stamps_dicts[i]['diff'] < kerSigReject:
-                testStamps.append(stamps_dicts[i])
+        # ntestStamps = 0
+        # for i in range(nS):
+        #     if stamps_dicts[i]['diff'] < kerSigReject:
+        #         ntestStamps += 1
+        # testStamps = []
+        # for i in range(nS):
+        #     if stamps_dicts[i]['diff'] < kerSigReject:
+        #         testStamps.append(stamps_dicts[i])
+        testMask = sa.diff < kerSigReject
+        testSa = StampsArray.subset(sa, testMask)
+        if testSa is None:
+            return 0.0
+        ntestStamps = testSa.nS
 
         testKerSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
 
         wxy = np.zeros((ntestStamps, ncomp2), dtype=np.float64)
 
-        matrix = build_matrix_numpy(testStamps, ntestStamps, nCompKer, kerOrder, bgOrder,
+        # matrix = build_matrix_numpy(testStamps, ntestStamps, nCompKer, kerOrder, bgOrder,
+        #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
+        matrix = build_matrix_numpy(testSa, ntestStamps, nCompKer, kerOrder, bgOrder,
                                     fwKSStamp, rPixX, rPixY, verbose, wxy)
 
-        testKerSol = build_scprod_numpy(testStamps, ntestStamps, imRef, nCompKer, kerOrder,
+        # testKerSol = build_scprod_numpy(testStamps, ntestStamps, imRef, nCompKer, kerOrder,
+        #                                 bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy)
+        testKerSol = build_scprod_numpy(testSa, ntestStamps, imRef, nCompKer, kerOrder,
                                         bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy)
 
         # indx2 = np.zeros(mat_size + 1, dtype=np.int32)
@@ -2687,8 +2935,11 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
         mcnt3 = 0
 
         for i in range(ntestStamps):
+            # sig1, sig2, sig3 = get_stamp_sig_numpy(
+            #     testStamps[i], testKerSol, imNoise, fwKSStamp, hwKSStamp,
+            #     rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder)
             sig1, sig2, sig3 = get_stamp_sig_numpy(
-                testStamps[i], testKerSol, imNoise, fwKSStamp, hwKSStamp,
+                testSa, i, testKerSol, imNoise, fwKSStamp, hwKSStamp,
                 rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder)
 
             if sig1 != -1 and sig1 <= MAXVAL:
@@ -2742,12 +2993,18 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
     return 0.0
 
 
-def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
+def check_again_numpy(sa, kernelSol, imConv, imRef, imNoise,
                       nS, verbose, figMerit, kerSigReject, statSig,
                       fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
                       nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
                       hwKernel, fwKernel, usePCA, filter_x, filter_y,
                       PCA, fillVal):
+    # def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
+    #                       nS, verbose, figMerit, kerSigReject, statSig,
+    #                       fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+    #                       nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
+    #                       hwKernel, fwKernel, usePCA, filter_x, filter_y,
+    #                       PCA, fillVal):
     ss = np.zeros(nS, dtype=np.float32)
     nss = 0
 
@@ -2758,17 +3015,27 @@ def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
     nskippedSubstamps = 0
 
     for istamp in range(nS):
-        if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
+        # if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
+        if sa.sscnt[istamp] < sa.nss[istamp]:
+            # sig1, sig2, sig3 = get_stamp_sig_numpy(
+            #     stamps[istamp], kernelSol, imNoise,
+            #     fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+            #     figMerit, statSig, nCompKer, kerOrder, bgOrder)
             sig1, sig2, sig3 = get_stamp_sig_numpy(
-                stamps[istamp], kernelSol, imNoise,
+                sa, istamp, kernelSol, imNoise,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
                 figMerit, statSig, nCompKer, kerOrder, bgOrder)
 
             if (figMerit[0:1] == "v" and sig1 == -1) or \
                (figMerit[0:1] == "s" and sig2 == -1) or \
                (figMerit[0:1] == "h" and sig3 == -1):
-                stamps[istamp]['sscnt'] += 1
-                fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
+                # stamps[istamp]['sscnt'] += 1
+                sa.sscnt[istamp] += 1
+                # fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
+                #                  ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                #                  bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                #                  PCA, fillVal, mRData)
+                fill_stamp_numpy(sa, istamp, imConv, imRef, rPixX, rPixY, verbose,
                                  ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                                  bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
                                  PCA, fillVal, mRData)
@@ -2781,7 +3048,8 @@ def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
                 elif figMerit[0:1] == "h":
                     sig = sig3
 
-                stamps[istamp]['chi2'] = sig
+                # stamps[istamp]['chi2'] = sig
+                sa.chi2[istamp] = sig
                 ss[nss] = sig
                 nss += 1
         else:
@@ -2794,10 +3062,17 @@ def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
 
     scnt = 0
     for istamp in range(nS):
-        if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
-            if (stamps[istamp]['chi2'] - mean) > kerSigReject * stdev:
-                stamps[istamp]['sscnt'] += 1
-                rc = fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
+        # if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
+        if sa.sscnt[istamp] < sa.nss[istamp]:
+            # if (stamps[istamp]['chi2'] - mean) > kerSigReject * stdev:
+            if (sa.chi2[istamp] - mean) > kerSigReject * stdev:
+                # stamps[istamp]['sscnt'] += 1
+                sa.sscnt[istamp] += 1
+                # rc = fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
+                #                       ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                #                       bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                #                       PCA, fillVal, mRData)
+                rc = fill_stamp_numpy(sa, istamp, imConv, imRef, rPixX, rPixY, verbose,
                                       ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                                       bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
                                       PCA, fillVal, mRData)
@@ -2809,10 +3084,14 @@ def check_again_numpy(stamps, kernelSol, imConv, imRef, imNoise,
     return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps)
 
 
-def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
+def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
                      verbose, nS, fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
                      kerSigReject, statSig, mRData, ngauss, deg_fixe,
                      hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal):
+    # def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
+    #                      verbose, nS, fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
+    #                      kerSigReject, statSig, mRData, ngauss, deg_fixe,
+    #                      hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
@@ -2822,9 +3101,13 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
 
     iter_count = 0
     logger.debug("  fitKernel: iteration %d start", iter_count)
-    matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
+    # matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
+    #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
+    matrix = build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder,
                                 fwKSStamp, rPixX, rPixY, verbose, wxy)
-    kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
+    # kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
+    #                                fwKSStamp, hwKSStamp, rPixX, wxy)
+    kernelSol = build_scprod_numpy(sa, nS, imRef, nCompKer, kerOrder, bgOrder,
                                    fwKSStamp, hwKSStamp, rPixX, wxy)
     logger.debug("  fitKernel: build_matrix0+scprod0 done")
 
@@ -2835,8 +3118,15 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
         matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
     logger.debug("  fitKernel: solve done")
 
+    # check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
+    #     stamps_dicts, kernelSol, imConv, imRef, imNoise,
+    #     nS, verbose, figMerit, kerSigReject, statSig,
+    #     fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+    #     nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
+    #     hwKernel, fwKernel, usePCA, filter_x, filter_y,
+    #     PCA, fillVal)
     check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
-        stamps_dicts, kernelSol, imConv, imRef, imNoise,
+        sa, kernelSol, imConv, imRef, imNoise,
         nS, verbose, figMerit, kerSigReject, statSig,
         fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
         nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
@@ -2849,9 +3139,13 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
         logger.debug("  fitKernel: iteration %d start", iter_count)
         wxy = np.zeros((nS, ncomp2), dtype=np.float64)
 
-        matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
+        # matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
+        #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
+        matrix = build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder,
                                     fwKSStamp, rPixX, rPixY, verbose, wxy)
-        kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
+        # kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
+        #                                fwKSStamp, hwKSStamp, rPixX, wxy)
+        kernelSol = build_scprod_numpy(sa, nS, imRef, nCompKer, kerOrder, bgOrder,
                                        fwKSStamp, hwKSStamp, rPixX, wxy)
         logger.debug("  fitKernel: build_matrix+scprod done")
 
@@ -2862,8 +3156,15 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
             matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
         logger.debug("  fitKernel: solve done")
 
+        # check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
+        #     stamps_dicts, kernelSol, imConv, imRef, imNoise,
+        #     nS, verbose, figMerit, kerSigReject, statSig,
+        #     fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+        #     nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
+        #     hwKernel, fwKernel, usePCA, filter_x, filter_y,
+        #     PCA, fillVal)
         check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
-            stamps_dicts, kernelSol, imConv, imRef, imNoise,
+            sa, kernelSol, imConv, imRef, imNoise,
             nS, verbose, figMerit, kerSigReject, statSig,
             fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
             nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
@@ -2876,7 +3177,8 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
         'meansigSubstamps': meansigSubstamps,
         'scatterSubstamps': scatterSubstamps,
         'NskippedSubstamps': nskippedSubstamps,
-        'stamps': stamps_dicts,
+        # 'stamps': stamps_dicts,
+        'stamps': sa,
     }
 
 
@@ -2960,8 +3262,10 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
     status = 1
     flag = 1
     kerFitThresh = fitThresh
-    ctStamps = None
-    ciStamps = None
+    # ctStamps = None
+    # ciStamps = None
+    ctSa = None
+    ciSa = None
 
     while (status <= 2) and flag:
         flag = 0
@@ -2969,11 +3273,13 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
         ntS = 0
 
         if localForceConvolve != "i":
-            ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
-                        for _ in range(nStamps)]
+            # ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+            #             for _ in range(nStamps)]
+            ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
         if localForceConvolve != "t":
-            ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
-                        for _ in range(nStamps)]
+            # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+            #             for _ in range(nStamps)]
+            ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
 
         for l in range(nStampY):
             for k in range(nStampX):
@@ -2985,13 +3291,19 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 sYMax = min(sYMin + fwStamp - 1, rYBMax)
 
                 if localForceConvolve != "i":
-                    ctStamps[ntS]['sscnt'] = 0
-                    ctStamps[ntS]['nss'] = 0
-                    ctStamps[ntS]['chi2'] = 0.0
+                    # ctStamps[ntS]['sscnt'] = 0
+                    ctSa.sscnt[ntS] = 0
+                    # ctStamps[ntS]['nss'] = 0
+                    ctSa.nss[ntS] = 0
+                    # ctStamps[ntS]['chi2'] = 0.0
+                    ctSa.chi2[ntS] = 0.0
                 if localForceConvolve != "t":
-                    ciStamps[niS]['sscnt'] = 0
-                    ciStamps[niS]['nss'] = 0
-                    ciStamps[niS]['chi2'] = 0.0
+                    # ciStamps[niS]['sscnt'] = 0
+                    ciSa.sscnt[niS] = 0
+                    # ciStamps[niS]['nss'] = 0
+                    ciSa.nss[niS] = 0
+                    # ciStamps[niS]['chi2'] = 0.0
+                    ciSa.chi2[niS] = 0.0
 
                 if xcmp is not None and Ncmp > 0:
                     if verbose >= 2:
@@ -3001,7 +3313,8 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                            (ycmp[m] > sYMin + hwKernel + 1) and (ycmp[m] < sYMax - hwKernel - 1):
                             build_stamps_numpy(
                                 sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
-                                rXBMin, rYBMin, ciStamps, ctStamps,
+                                # rXBMin, rYBMin, ciStamps, ctStamps,
+                                rXBMin, rYBMin, ciSa, ctSa,
                                 iRData1d, tRData1d,
                                 xcmp[m] - rXBMin, ycmp[m] - rYBMin,
                                 verbose, localForceConvolve, rPixX, rPixY,
@@ -3013,7 +3326,8 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                             sys.stderr.write("Automatically finding additional centers\n")
                         build_stamps_numpy(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
-                            rXBMin, rYBMin, ciStamps, ctStamps,
+                            # rXBMin, rYBMin, ciStamps, ctStamps,
+                            rXBMin, rYBMin, ciSa, ctSa,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
@@ -3023,7 +3337,8 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                     if useFullSS:
                         build_stamps_numpy(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
-                            rXBMin, rYBMin, ciStamps, ctStamps,
+                            # rXBMin, rYBMin, ciStamps, ctStamps,
+                            rXBMin, rYBMin, ciSa, ctSa,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
@@ -3032,7 +3347,8 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                     else:
                         build_stamps_numpy(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
-                            rXBMin, rYBMin, ciStamps, ctStamps,
+                            # rXBMin, rYBMin, ciStamps, ctStamps,
+                            rXBMin, rYBMin, ciSa, ctSa,
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
@@ -3041,13 +3357,17 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
                 if localForceConvolve != "i":
                     if verbose >= 2:
-                        sys.stderr.write("    templ: %d substamps\n" % ctStamps[ntS]['nss'])
-                    if ctStamps[ntS]['nss'] > 0:
+                        # sys.stderr.write("    templ: %d substamps\n" % ctStamps[ntS]['nss'])
+                        sys.stderr.write("    templ: %d substamps\n" % ctSa.nss[ntS])
+                    # if ctStamps[ntS]['nss'] > 0:
+                    if ctSa.nss[ntS] > 0:
                         ntS += 1
                 if localForceConvolve != "t":
                     if verbose >= 2:
-                        sys.stderr.write("    image: %d substamps\n" % ciStamps[niS]['nss'])
-                    if ciStamps[niS]['nss'] > 0:
+                        # sys.stderr.write("    image: %d substamps\n" % ciStamps[niS]['nss'])
+                        sys.stderr.write("    image: %d substamps\n" % ciSa.nss[niS])
+                    # if ciStamps[niS]['nss'] > 0:
+                    if ciSa.nss[niS] > 0:
                         niS += 1
 
         iSFrac = niS / float(nStamps)
@@ -3073,26 +3393,34 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             sys.stderr.write("Too few stamps were fit, scaling down fitting threshold to %.2f\n" % kerFitThresh)
 
             if localForceConvolve != "i":
-                ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
-                            for _ in range(nStamps)]
+                # ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                #             for _ in range(nStamps)]
+                ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
             if localForceConvolve != "t":
-                ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
-                            for _ in range(nStamps)]
+                # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                #             for _ in range(nStamps)]
+                ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
 
             mRData1d[:] = mRData1d & ~0xa00
 
         status += 1
 
     if (niS == 0) and (ntS == 0):
-        return {'niS': 0, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+        # return {'niS': 0, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+        #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
+        return {'niS': 0, 'ntS': 0, 'ctStamps': ctSa, 'ciStamps': ciSa,
                 'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
     if localForceConvolve == "i":
         if niS == 0:
-            return {'niS': 0, 'ntS': ntS, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+            # return {'niS': 0, 'ntS': ntS, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+            #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
+            return {'niS': 0, 'ntS': ntS, 'ctStamps': ctSa, 'ciStamps': ciSa,
                     'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
     if localForceConvolve == "t":
         if ntS == 0:
-            return {'niS': niS, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+            # return {'niS': niS, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
+            #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
+            return {'niS': niS, 'ntS': 0, 'ctStamps': ctSa, 'ciStamps': ciSa,
                     'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
 
     filter_x = np.zeros(fwKernel * nCompKer, dtype=np.float64)
@@ -3103,8 +3431,10 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
     logger.debug("region_buildstamps_numpy done")
     return {
         'niS': niS, 'ntS': ntS,
-        'ctStamps': ctStamps,
-        'ciStamps': ciStamps,
+        # 'ctStamps': ctStamps,
+        # 'ciStamps': ciStamps,
+        'ctStamps': ctSa,
+        'ciStamps': ciSa,
         'kernel_vec': kernel_vec,
         'filter_x': filter_x,
         'filter_y': filter_y,
@@ -3149,8 +3479,10 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     oRData1d = oRData.ravel()
     mRData1d = mRData.ravel()
 
-    ctStamps = buildstamps_result['ctStamps']
-    ciStamps = buildstamps_result['ciStamps']
+    # ctStamps = buildstamps_result['ctStamps']
+    ctSa = buildstamps_result['ctStamps']
+    # ciStamps = buildstamps_result['ciStamps']
+    ciSa = buildstamps_result['ciStamps']
     ntS = buildstamps_result['ntS']
     niS = buildstamps_result['niS']
     kernel_vec = buildstamps_result['kernel_vec']
@@ -3164,16 +3496,28 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     sys.stderr.write("Filling Template sub-stamps\n")
     if localForceConvolve != "i":
         for k in range(ntS):
-            ctStamps[k]['sscnt'] = 0
-            fill_stamp_numpy(ctStamps[k], tRData1d, iRData1d,
+            # ctStamps[k]['sscnt'] = 0
+            ctSa.sscnt[k] = 0
+            # fill_stamp_numpy(ctStamps[k], tRData1d, iRData1d,
+            #                  rPixX, rPixY, verbose, ngauss, deg_fixe,
+            #                  hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+            #                  bgOrder, nCompKer, kerOrder, usePCA,
+            #                  filter_x, filter_y, PCA, fillVal, mRData1d)
+            fill_stamp_numpy(ctSa, k, tRData1d, iRData1d,
                              rPixX, rPixY, verbose, ngauss, deg_fixe,
                              hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                              bgOrder, nCompKer, kerOrder, usePCA,
                              filter_x, filter_y, PCA, fillVal, mRData1d)
         if localForceConvolve == "b":
             sys.stderr.write("\n\nTrying to convolve the TEMPLATE to fit IMAGE\n")
+            # tMerit = check_stamps_numpy(
+            #     ctStamps, ntS, iRData1d, oRData1d,
+            #     nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
+            #     localForceConvolve, figMerit, kerSigReject, statSig,
+            #     fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
+            #     kernel_vec, mRData1d)
             tMerit = check_stamps_numpy(
-                ctStamps, ntS, iRData1d, oRData1d,
+                ctSa, ntS, iRData1d, oRData1d,
                 nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
                 localForceConvolve, figMerit, kerSigReject, statSig,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
@@ -3186,16 +3530,28 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     sys.stderr.write("Filling Image sub-stamps\n")
     if localForceConvolve != "t":
         for k in range(niS):
-            ciStamps[k]['sscnt'] = 0
-            fill_stamp_numpy(ciStamps[k], iRData1d, tRData1d,
+            # ciStamps[k]['sscnt'] = 0
+            ciSa.sscnt[k] = 0
+            # fill_stamp_numpy(ciStamps[k], iRData1d, tRData1d,
+            #                  rPixX, rPixY, verbose, ngauss, deg_fixe,
+            #                  hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+            #                  bgOrder, nCompKer, kerOrder, usePCA,
+            #                  filter_x, filter_y, PCA, fillVal, mRData1d)
+            fill_stamp_numpy(ciSa, k, iRData1d, tRData1d,
                              rPixX, rPixY, verbose, ngauss, deg_fixe,
                              hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                              bgOrder, nCompKer, kerOrder, usePCA,
                              filter_x, filter_y, PCA, fillVal, mRData1d)
         if localForceConvolve == "b":
             sys.stderr.write("\n\nTrying to convolve the IMAGE to fit TEMPLATE \n")
+            # iMerit = check_stamps_numpy(
+            #     ciStamps, niS, tRData1d, oRData1d,
+            #     nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
+            #     localForceConvolve, figMerit, kerSigReject, statSig,
+            #     fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
+            #     kernel_vec, mRData1d)
             iMerit = check_stamps_numpy(
-                ciStamps, niS, tRData1d, oRData1d,
+                ciSa, niS, tRData1d, oRData1d,
                 nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
                 localForceConvolve, figMerit, kerSigReject, statSig,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
@@ -3216,8 +3572,10 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
         'convTmpl': convTmpl,
         'tMerit': tMerit,
         'iMerit': iMerit,
-        'ctStamps': ctStamps,
-        'ciStamps': ciStamps,
+        # 'ctStamps': ctStamps,
+        # 'ciStamps': ciStamps,
+        'ctStamps': ctSa,
+        'ciStamps': ciSa,
     }
 
 
@@ -3279,8 +3637,10 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
     rYMax = setup_result['rYMax']
 
     convTmpl = fit_result['convTmpl']
-    ctStamps = fit_result['ctStamps']
-    ciStamps = fit_result['ciStamps']
+    # ctStamps = fit_result['ctStamps']
+    ctSa = fit_result['ctStamps']
+    # ciStamps = fit_result['ciStamps']
+    ciSa = fit_result['ciStamps']
 
     ntS = buildstamps_result['ntS']
     niS = buildstamps_result['niS']
@@ -3311,8 +3671,14 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
         oRData1d = setup_result['oRData'].ravel().copy()
+        # fit_result_k = fit_kernel_numpy(
+        #     ctStamps, iRData1d, tRData1d, oRData1d,
+        #     nCompKer, kerOrder, bgOrder, verbose, nS,
+        #     fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
+        #     kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
+        #     hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal)
         fit_result_k = fit_kernel_numpy(
-            ctStamps, iRData1d, tRData1d, oRData1d,
+            ctSa, iRData1d, tRData1d, oRData1d,
             nCompKer, kerOrder, bgOrder, verbose, nS,
             fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
             kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
@@ -3321,7 +3687,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         meansigSubstamps = fit_result_k['meansigSubstamps']
         scatterSubstamps = fit_result_k['scatterSubstamps']
         NskippedSubstamps = fit_result_k['NskippedSubstamps']
-        ctStamps = fit_result_k['stamps']
+        # ctStamps = fit_result_k['stamps']
+        ctSa = fit_result_k['stamps']
         kerSol = tKerSol
 
         logger.debug("[region %d] convolve_diff: fitKernel done", region_idx)
@@ -3418,14 +3785,19 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         logger.debug("[region %d] convolve_diff: noise_combine done", region_idx)
         if savexyflag:
             for si in range(ntS):
-                for sc in range(ctStamps[si]['nss']):
+                # for sc in range(ctStamps[si]['nss']):
+                for sc in range(ctSa.nss[si]):
                     entry = {
-                        'x': int(ctStamps[si]['xss'][sc]),
-                        'y': int(ctStamps[si]['yss'][sc]),
+                        # 'x': int(ctStamps[si]['xss'][sc]),
+                        'x': int(ctSa.xss[si, sc]),
+                        # 'y': int(ctStamps[si]['yss'][sc]),
+                        'y': int(ctSa.yss[si, sc]),
                     }
-                    if sc == ctStamps[si]['sscnt']:
+                    # if sc == ctStamps[si]['sscnt']:
+                    if sc == ctSa.sscnt[si]:
                         entry['isUsed'] = 1
-                    elif sc < ctStamps[si]['sscnt']:
+                    # elif sc < ctStamps[si]['sscnt']:
+                    elif sc < ctSa.sscnt[si]:
                         entry['isUsed'] = -1
                     else:
                         entry['isUsed'] = 0
@@ -3433,7 +3805,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         if sameConv:
             localForceConvolve = "t"
-            ciStamps = None
+            # ciStamps = None
+            ciSa = None
 
     else:
         sys.stderr.write("\n\n Region %d,%d %d,%d : Convolving IMAGE\n" % (rXMin, rXMax, rYMin, rYMax))
@@ -3441,8 +3814,14 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
         oRData1d = setup_result['oRData'].ravel().copy()
+        # fit_result_k = fit_kernel_numpy(
+        #     ciStamps, tRData1d, iRData1d, oRData1d,
+        #     nCompKer, kerOrder, bgOrder, verbose, nS,
+        #     fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
+        #     kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
+        #     hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal)
         fit_result_k = fit_kernel_numpy(
-            ciStamps, tRData1d, iRData1d, oRData1d,
+            ciSa, tRData1d, iRData1d, oRData1d,
             nCompKer, kerOrder, bgOrder, verbose, nS,
             fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
             kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
@@ -3451,7 +3830,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         meansigSubstamps = fit_result_k['meansigSubstamps']
         scatterSubstamps = fit_result_k['scatterSubstamps']
         NskippedSubstamps = fit_result_k['NskippedSubstamps']
-        ciStamps = fit_result_k['stamps']
+        # ciStamps = fit_result_k['stamps']
+        ciSa = fit_result_k['stamps']
         kerSol = iKerSol
 
         logger.debug("[region %d] convolve_diff: fitKernel done", region_idx)
@@ -3548,14 +3928,19 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         logger.debug("[region %d] convolve_diff: noise_combine done", region_idx)
         if savexyflag:
             for si in range(niS):
-                for sc in range(ciStamps[si]['nss']):
+                # for sc in range(ciStamps[si]['nss']):
+                for sc in range(ciSa.nss[si]):
                     entry = {
-                        'x': int(ciStamps[si]['xss'][sc]),
-                        'y': int(ciStamps[si]['yss'][sc]),
+                        # 'x': int(ciStamps[si]['xss'][sc]),
+                        'x': int(ciSa.xss[si, sc]),
+                        # 'y': int(ciStamps[si]['yss'][sc]),
+                        'y': int(ciSa.yss[si, sc]),
                     }
-                    if sc == ciStamps[si]['sscnt']:
+                    # if sc == ciStamps[si]['sscnt']:
+                    if sc == ciSa.sscnt[si]:
                         entry['isUsed'] = 1
-                    elif sc < ciStamps[si]['sscnt']:
+                    # elif sc < ciStamps[si]['sscnt']:
+                    elif sc < ciSa.sscnt[si]:
                         entry['isUsed'] = -1
                     else:
                         entry['isUsed'] = 0
@@ -3563,7 +3948,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         if sameConv:
             localForceConvolve = "i"
-            ctStamps = None
+            # ctStamps = None
+            ctSa = None
 
     noiseData1d = tRData1d if convTmpl else iRData1d
 
@@ -3582,8 +3968,10 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         'savexy_entries': savexy_entries,
         'savexyXmin': rXBMin + (0 if convTmpl else 1),
         'savexyYmin': rYBMin + (0 if convTmpl else 1),
-        'ctStamps': ctStamps,
-        'ciStamps': ciStamps,
+        # 'ctStamps': ctStamps,
+        # 'ciStamps': ciStamps,
+        'ctStamps': ctSa,
+        'ciStamps': ciSa,
         'tRData': tRData1d.reshape(rPixY, rPixX),
         'iRData': iRData1d.reshape(rPixY, rPixX),
     }
@@ -3644,8 +4032,9 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     mRData = convolve_result['mRData'].copy()
     tRData = convolve_result['tRData']
     iRData = convolve_result['iRData']
-    ctStamps = convolve_result.get('ctStamps')
-    ciStamps = convolve_result.get('ciStamps')
+    ctSa = convolve_result.get('ctStamps')
+    ciSa = convolve_result.get('ciStamps')
+    # (now StampsArray objects, not list[dict])
 
     oRData1d = oRData.ravel()
     noiseData1d = noiseData.ravel()
@@ -3699,9 +4088,13 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             temp2 = np.zeros(nS, dtype=np.float32)
             kk = 0
             for l in range(nS):
-                if ctStamps[l]['sscnt'] < ctStamps[l]['nss']:
+                # if ctStamps[l]['sscnt'] < ctStamps[l]['nss']:
+                if ctSa.sscnt[l] < ctSa.nss[l]:
+                    # sig = get_final_stamp_sig_numpy(
+                    #     ctStamps[l], oRData1d, noiseData1d,
+                    #     fwKSStamp, hwKSStamp, rPixX, mRData1d)
                     sig = get_final_stamp_sig_numpy(
-                        ctStamps[l], oRData1d, noiseData1d,
+                        ctSa, l, oRData1d, noiseData1d,
                         fwKSStamp, hwKSStamp, rPixX, mRData1d)
                     temp2[kk] = sig
                     kk += 1
@@ -3723,9 +4116,13 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             temp2 = np.zeros(nS, dtype=np.float32)
             kk = 0
             for l in range(nS):
-                if ciStamps[l]['sscnt'] < ciStamps[l]['nss']:
+                # if ciStamps[l]['sscnt'] < ciStamps[l]['nss']:
+                if ciSa.sscnt[l] < ciSa.nss[l]:
+                    # sig = get_final_stamp_sig_numpy(
+                    #     ciStamps[l], oRData1d, noiseData1d,
+                    #     fwKSStamp, hwKSStamp, rPixX, mRData1d)
                     sig = get_final_stamp_sig_numpy(
-                        ciStamps[l], oRData1d, noiseData1d,
+                        ciSa, l, oRData1d, noiseData1d,
                         fwKSStamp, hwKSStamp, rPixX, mRData1d)
                     temp2[kk] = sig
                     kk += 1
