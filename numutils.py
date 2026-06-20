@@ -1537,7 +1537,13 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
     for pidx in range(nMaskPix):
         j = int(maskPixY[pidx])
         i = int(maskPixX[pidx])
-        make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+        # make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+        #                   nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        blockI = (i - hwKernel) // kcStep
+        i0 = blockI * kcStep + hwKernel
+        blockJ = (j - hwKernel) // kcStep
+        j0 = blockJ * kcStep + hwKernel
+        make_kernel_numpy(i0 + hwKernel, j0 + hwKernel, kernelSol, rPixX, rPixY,
                           nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
         aks = 0.0
         uks = 0.0
@@ -1723,15 +1729,25 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
     badSelf = (innerCMask.astype(np.int32) & FLAG_INPUT_ISBAD) > 0
     mRDataView[sy, sx] |= (FLAG_OUTPUT_ISBAD * badSelf.astype(np.int32))
 
-    mbitField = maximum_filter(cMaskView.astype(np.int32), size=fwKernel)
-    maskPixY, maskPixX = np.where(mbitField[sy, sx] > 0)
+    # mbitField = maximum_filter(cMaskView.astype(np.int32), size=fwKernel)
+    # maskPixY, maskPixX = np.where(mbitField[sy, sx] > 0)
+    badFlag2d = ((cMaskView.astype(np.int32) & FLAG_INPUT_ISBAD) > 0).astype(np.float64)
+    badCountField = fftconvolve(badFlag2d, np.ones((fwKernel, fwKernel)), mode='same')
+    badCountField = np.round(badCountField).astype(int)
+    maskPixY, maskPixX = np.where(badCountField[sy, sx] > 0)
     maskPixY += hwKernel
     maskPixX += hwKernel
 
     for pidx in range(len(maskPixY)):
         j = int(maskPixY[pidx])
         i = int(maskPixX[pidx])
-        make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+        # make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+        #                   nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+        blockI = (i - hwKernel) // kcStep
+        i0 = blockI * kcStep + hwKernel
+        blockJ = (j - hwKernel) // kcStep
+        j0 = blockJ * kcStep + hwKernel
+        make_kernel_numpy(i0 + hwKernel, j0 + hwKernel, kernelSol, rPixX, rPixY,
                           nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
         aks = 0.0
         uks = 0.0
