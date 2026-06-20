@@ -2130,6 +2130,105 @@ def fill_stamp_numpy(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_f
 
 
 @numba.jit(nopython=True)
+def get_stamp_sig_batch_jit(
+    sa_vectors, sa_krefArea, sa_sscnt, sa_nss, sa_xss, sa_yss,
+    kernelSol, imNoise, mRData1d,
+    fwKSStamp, hwKSStamp, rPixX, rPixY,
+    nCompKer, kerOrder, bgOrder, nS,
+    figMerit_is_v, statSig,
+    out_sig1, out_sig2, out_sig3):
+
+    LOCAL_ZEROVAL = 1e-10
+    LOCAL_MAXVAL = 1e10
+    LOCAL_FLAG_INPUT_ISBAD = 0x80
+    LOCAL_FLAG_ISNAN = 0x08
+    fwSq = fwKSStamp * fwKSStamp
+
+    for si in range(nS):
+        scnt = sa_sscnt[si]
+        if scnt >= sa_nss[si]:
+            out_sig1[si] = -1.0
+            out_sig2[si] = -1.0
+            out_sig3[si] = -1.0
+            continue
+
+        xi = sa_xss[si, scnt]
+        yi = sa_yss[si, scnt]
+
+        ncompBG = (nCompKer - 1) * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+        background = 0.0
+        k = 1
+        xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+        yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+        ax = 1.0
+        for i in range(bgOrder + 1):
+            ay = 1.0
+            for j in range(bgOrder - i + 1):
+                background += kernelSol[ncompBG + k] * ax * ay
+                k += 1
+                ay *= yf
+            ax *= xf
+
+        csModel = np.zeros(fwSq, dtype=np.float64)
+        coeff = kernelSol[1]
+        for i in range(fwSq):
+            csModel[i] = coeff * sa_vectors[si, 0, i]
+
+        kk = 2
+        for i1 in range(1, nCompKer):
+            coeff = 0.0
+            ax = 1.0
+            for ix in range(kerOrder + 1):
+                ay = 1.0
+                for iy in range(kerOrder - ix + 1):
+                    coeff += kernelSol[kk] * ax * ay
+                    kk += 1
+                    ay *= yf
+                ax *= xf
+            for i in range(fwSq):
+                csModel[i] += coeff * sa_vectors[si, i1, i]
+
+        im = sa_krefArea[si]
+
+        nsig = 0
+        sig1 = 0.0
+        temp = np.zeros(fwSq, dtype=np.float64)
+        for j in range(fwKSStamp):
+            yRegion2 = yi - hwKSStamp + j
+            for i in range(fwKSStamp):
+                xRegion2 = xi - hwKSStamp + i
+                idx = i + j * fwKSStamp
+
+                tdat = csModel[idx]
+                idat = im[idx]
+                ndat = imNoise[xRegion2 + rPixX * yRegion2]
+                diff = tdat - idat + background
+
+                mr_idx = xRegion2 + rPixX * yRegion2
+                if (mRData1d[mr_idx] & LOCAL_FLAG_INPUT_ISBAD) or (abs(idat) <= LOCAL_ZEROVAL):
+                    continue
+
+                temp[idx] = diff
+                if math.isnan(tdat) or math.isnan(idat):
+                    mRData1d[mr_idx] = mRData1d[mr_idx] | (LOCAL_FLAG_INPUT_ISBAD | LOCAL_FLAG_ISNAN)
+                    continue
+
+                nsig += 1
+                sig1 += diff * diff / ndat
+
+        if nsig > 0:
+            sig1 /= nsig
+            if sig1 >= LOCAL_MAXVAL:
+                sig1 = -1.0
+        else:
+            sig1 = -1.0
+
+        out_sig1[si] = sig1
+        out_sig2[si] = -1.0
+        out_sig3[si] = -1.0
+
+
+@numba.jit(nopython=True)
 def get_stamp_sig_jit(vectors, kernelSol, imNoise, mRData1d, im,
                        fwKSStamp, hwKSStamp, rPixX, rPixY,
                        nCompKer, kerOrder, bgOrder, xi, yi,
@@ -3205,27 +3304,39 @@ def check_again_numpy(sa, kernelSol, imConv, imRef, imNoise,
     stdev = 0.0
     nskippedSubstamps = 0
 
+    # 批量计算所有 stamps 的 sig (figMerit="v" 模式)
+    batch_sig1 = None
+    if figMerit[0:1] == "v":
+        batch_sig1 = np.zeros(nS, dtype=np.float64)
+        batch_sig2 = np.zeros(nS, dtype=np.float64)
+        batch_sig3 = np.zeros(nS, dtype=np.float64)
+        get_stamp_sig_batch_jit(
+            np.asarray(sa.vectors, dtype=np.float64), np.asarray(sa.krefArea, dtype=np.float64),
+            sa.sscnt, sa.nss, sa.xss, sa.yss,
+            np.asarray(kernelSol, dtype=np.float64),
+            np.asarray(imNoise, dtype=np.float64),
+            np.asarray(mRData, dtype=np.int32).ravel(),
+            fwKSStamp, hwKSStamp, rPixX, rPixY,
+            nCompKer, kerOrder, bgOrder, nS,
+            1, statSig,
+            batch_sig1, batch_sig2, batch_sig3)
+
     for istamp in range(nS):
-        # if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
         if sa.sscnt[istamp] < sa.nss[istamp]:
-            # sig1, sig2, sig3 = get_stamp_sig_numpy(
-            #     stamps[istamp], kernelSol, imNoise,
-            #     fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
-            #     figMerit, statSig, nCompKer, kerOrder, bgOrder)
-            sig1, sig2, sig3 = get_stamp_sig_numpy(
-                sa, istamp, kernelSol, imNoise,
-                fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
-                figMerit, statSig, nCompKer, kerOrder, bgOrder)
+            if batch_sig1 is not None:
+                sig1 = batch_sig1[istamp]
+                sig2 = batch_sig2[istamp]
+                sig3 = batch_sig3[istamp]
+            else:
+                sig1, sig2, sig3 = get_stamp_sig_numpy(
+                    sa, istamp, kernelSol, imNoise,
+                    fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
+                    figMerit, statSig, nCompKer, kerOrder, bgOrder)
 
             if (figMerit[0:1] == "v" and sig1 == -1) or \
                (figMerit[0:1] == "s" and sig2 == -1) or \
                (figMerit[0:1] == "h" and sig3 == -1):
-                # stamps[istamp]['sscnt'] += 1
                 sa.sscnt[istamp] += 1
-                # fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
-                #                  ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                #                  bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
-                #                  PCA, fillVal, mRData)
                 fill_stamp_numpy(sa, istamp, imConv, imRef, rPixX, rPixY, verbose,
                                  ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                                  bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
@@ -3239,7 +3350,6 @@ def check_again_numpy(sa, kernelSol, imConv, imRef, imNoise,
                 elif figMerit[0:1] == "h":
                     sig = sig3
 
-                # stamps[istamp]['chi2'] = sig
                 sa.chi2[istamp] = sig
                 ss[nss] = sig
                 nss += 1
