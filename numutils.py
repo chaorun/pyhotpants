@@ -541,8 +541,8 @@ def bin_quartile_numpy(counts, target):
 
 def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
                                  umask, smask, maxiter, rPixX, mRData_2d, statSig):
-    import time
-    t0 = time.time()
+    # import time
+    # t0 = time.time()
     nstat = 100
     ufstat = 0.9
     mfstat = 0.5
@@ -593,20 +593,20 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
     if smask > 0:
         skip_all |= (mRData_region & smask) != 0
     skip_all |= np.abs(data_flat) <= ZEROVAL
-    t_skip = time.time()
+    # t_skip = time.time()
 
     nan_mask = np.isnan(data_flat)
     skip_all |= nan_mask
-    t_nan = time.time()
+    # t_nan = time.time()
 
     if nan_mask.any():
         nan_y, nan_x = np.where(nan_mask.reshape(nPixY, nPixX))
         mRData_2d[nan_y + y0Reg, nan_x + x0Reg] |= (FLAG_INPUT_ISBAD | FLAG_ISNAN)
-    t_where = time.time()
+    # t_where = time.time()
 
     sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
-    t1 = time.time(); logger.debug("[stats3] skip=%.3fs nan=%.3fs where=%.3fs sdat=%.3fs total_setup=%.3fs",
-        t_skip - t0, t_nan - t_skip, t_where - t_nan, t1 - t_where, t1 - t0)
+    # t1 = time.time(); logger.debug("[stats3] skip=%.3fs nan=%.3fs where=%.3fs sdat=%.3fs total_setup=%.3fs",
+    #     t_skip - t0, t_nan - t_skip, t_where - t_nan, t1 - t_where, t1 - t0)
     if len(sdat) == 0:
         mode_val = 0.0
         if nfound > 0:
@@ -614,9 +614,9 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         return {'sum': 0.0, 'mean': 0.0, 'median': mode_val, 'mode': mode_val,
                 'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
 
-    t2 = time.time()
+    # t2 = time.time()
     mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat, maxiter, statSig)
-    t3 = time.time(); logger.debug("[stats3] sigma_clip %.3fs", t3 - t2)
+    # t3 = time.time(); logger.debug("[stats3] sigma_clip %.3fs", t3 - t2)
     if sc_rc != 0:
         return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
                 'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
@@ -707,7 +707,7 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         else:
             break
 
-    t4 = time.time(); logger.debug("[stats3] binning loop %.3fs", t4 - t3)
+    # t4 = time.time(); logger.debug("[stats3] binning loop %.3fs", t4 - t3)
     fwhm_val = current_binsize * (upper_val - lower_val) / 1.35
 
     median_target = goodcnt_h / 2.0
@@ -4045,6 +4045,8 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
                                 hwKernel, fwKernel, kernel, kernel_coeffs,
                                 convolveVariance, kerFracMask,
                                 rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+    # import time
+    # t0 = time.time()
     fwSq = fwKernel * fwKernel
     dovar = variance is not None
 
@@ -4064,6 +4066,7 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
 
     kernel_vec_2d = np.array([np.asarray(kernel_vec[idx][:fwSq], dtype=np.float64)
                               for idx in range(nCompKer)])
+    # t1 = time.time(); logger.debug("  sc_fast: prep %.3fs", t1 - t0)
 
     spatial_convolve_jit_kernel(
         image1d, var1d, cMask1d,
@@ -4072,12 +4075,14 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
         xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
         kernel_vec_2d)
+    # t2 = time.time(); logger.debug("  sc_fast: jit_kernel %.3fs", t2 - t1)
 
     if dovar:
         vData = vData64.astype(np.float32)
 
     cRdata_out = cRdata64.astype(np.float32)
     mRData_out = mRData64
+    # t3 = time.time(); logger.debug("  sc_fast: post %.3fs total %.3fs", t3 - t2, t3 - t0)
     return vData, cRdata_out, mRData_out
 
 
@@ -4537,12 +4542,15 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
                              bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
                              PCA, fillVal, mRData)
 
+    # import time
     iter_count = 0
+    # t_start = time.time()
     logger.debug("  fitKernel: iteration %d start", iter_count)
     # matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
     #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
     # matrix = build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder,
     #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
+    # tm = time.time()
     matrix = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
                                 nS, nCompKer, kerOrder, bgOrder,
                                 fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps)
@@ -4554,6 +4562,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
                                    nS, imRef, nCompKer, kerOrder, bgOrder,
                                    fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=nKSStamps)
     logger.debug("  fitKernel: build_matrix0+scprod0 done")
+    # tm_bm = time.time(); logger.debug("  fitKernel: build+scprod %.3fs", tm_bm - tm)
 
     # indx = np.zeros(mat_size + 1, dtype=np.int32)
     # ludcmp_numpy(matrix, mat_size, indx)
@@ -4561,6 +4570,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     kernelSol[1:mat_size+1] = np.linalg.solve(
         matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
     logger.debug("  fitKernel: solve done")
+    # tm_slv = time.time(); logger.debug("  fitKernel: solve %.3fs", tm_slv - tm_bm)
 
     # check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
     #     stamps_dicts, kernelSol, imConv, imRef, imNoise,
@@ -4590,6 +4600,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     nskippedSubstamps = ca_result['nskippedSubstamps']
     do_fill(ca_result['refill_indices'])
     logger.debug("  fitKernel: check_again done, check=%s", check)
+    # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 
     while check:
         iter_count += 1
@@ -4600,6 +4611,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
         # matrix = build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder,
         #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
+        # tm = time.time()
         matrix = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
                                     nS, nCompKer, kerOrder, bgOrder,
                                     fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps)
@@ -4611,6 +4623,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
                                        nS, imRef, nCompKer, kerOrder, bgOrder,
                                        fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=nKSStamps)
         logger.debug("  fitKernel: build_matrix+scprod done")
+        # tm_bm = time.time(); logger.debug("  fitKernel: build+scprod %.3fs", tm_bm - tm)
 
         # indx = np.zeros(mat_size + 1, dtype=np.int32)
         # ludcmp_numpy(matrix, mat_size, indx)
@@ -4618,6 +4631,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         kernelSol[1:mat_size+1] = np.linalg.solve(
             matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
         logger.debug("  fitKernel: solve done")
+        # tm_slv = time.time(); logger.debug("  fitKernel: solve %.3fs", tm_slv - tm_bm)
 
         # check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
         #     stamps_dicts, kernelSol, imConv, imRef, imNoise,
@@ -4647,6 +4661,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         nskippedSubstamps = ca_result['nskippedSubstamps']
         do_fill(ca_result['refill_indices'])
         logger.debug("  fitKernel: check_again done, check=%s", check)
+        # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 
     return {
         'kernelSol': kernelSol,
@@ -5932,9 +5947,9 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                          diff_out, noise_out, conv_out, mask_out,
                          ctx_info, params_info, region_idx, stats_list):
     import sys
-    import time
+    # import time
     logger.debug("[region %d] region_output_numpy start", region_idx)
-    start_time = time.time()
+    # start_time = time.time()
 
     nCompKer = ctx_info['nCompKer']
     nBGVectors = ctx_info['nBGVectors']
@@ -6010,7 +6025,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     mRData2d[:hwKernel, hwKernel:rPixX - hwKernel] |= FLAG_OUTPUT_ISBAD
     mRData2d[rPixY - hwKernel:, hwKernel:rPixX - hwKernel] |= FLAG_OUTPUT_ISBAD
 
-    tm1 = time.time(); logger.debug("[out] pre-output setup done, %.3fs", tm1 - start_time)
+    # tm1 = time.time(); logger.debug("[out] pre-output setup done, %.3fs", tm1 - start_time)
 
     sys.stderr.write(" Creating and writing output images...\n")
 
@@ -6049,7 +6064,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         oRData2d[inner_sy, inner_sx] *= -1.0
 
         if figMerit[0:1] == "v":
-            tm2 = time.time(); logger.debug("[out] final_stamp_sig loop start")
+            # tm2 = time.time(); logger.debug("[out] final_stamp_sig loop start")
             temp2 = np.zeros(nS, dtype=np.float32)
             kk = 0
             for l in range(nS):
@@ -6071,7 +6086,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                             fwKSStamp, hwKSStamp, rPixX, mRData1d)
                         temp2[kk] = sig
                         kk += 1
-            tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
+            # tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
             mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
@@ -6087,7 +6102,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             noiseData2d[inner_sy, inner_sx] *= inv1
 
         if figMerit[0:1] == "v":
-            tm2 = time.time(); logger.debug("[out] final_stamp_sig loop start")
+            # tm2 = time.time(); logger.debug("[out] final_stamp_sig loop start")
             temp2 = np.zeros(nS, dtype=np.float32)
             kk = 0
             for l in range(nS):
@@ -6109,7 +6124,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                             fwKSStamp, hwKSStamp, rPixX, mRData1d)
                         temp2[kk] = sig
                         kk += 1
-            tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
+            # tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
             mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
@@ -6119,7 +6134,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
     mRData_2d = mRData1d.reshape(rPixY, rPixX)
 
-    tm4 = time.time(); logger.debug("[out] get_stamp_stats3 start")
+    # tm4 = time.time(); logger.debug("[out] get_stamp_stats3 start")
 
     sys.stderr.write(" Getting diffim stats for GOOD pixels : \n")
     res_good = get_stamp_stats3_numpy(
@@ -6173,7 +6188,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
 
     sys.stderr.write(" Emperical / Expected Noise for OK pixels = %.2f\n\n" % (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0))
 
-    tm5 = time.time(); logger.debug("[out] get_stamp_stats3 done, %.3fs", tm5 - tm4)
+    # tm5 = time.time(); logger.debug("[out] get_stamp_stats3 done, %.3fs", tm5 - tm4)
 
     if rescaleOK:
         if diffrat != 0:
@@ -6196,7 +6211,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
     mRData_2d = mRData1d.reshape(rPixY, rPixX)
 
-    tm6 = time.time(); logger.debug("[out] insert_subregion start")
+    # tm6 = time.time(); logger.debug("[out] insert_subregion start")
 
     insert_subregion_flt_numpy(
         oRData_2d, diff_out, fpixelOutX, fpixelOutY,
@@ -6212,7 +6227,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             mRData_2d, mask_out, fpixelOutX, fpixelOutY,
             lpixelOutX, lpixelOutY, xBufLo, yBufLo)
 
-    tm7 = time.time(); logger.debug("[out] insert_subregion done, %.3fs", tm7 - tm6)
+    # tm7 = time.time(); logger.debug("[out] insert_subregion done, %.3fs", tm7 - tm6)
 
     kerSol = convolve_result['kerSol']
 
