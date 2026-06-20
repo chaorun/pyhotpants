@@ -361,6 +361,9 @@ def hotpants(
     uss=0, savexy=0,
     dump_dir=None,
 ):
+    import sys
+    import logging
+    logging.basicConfig(format='%(asctime)s.%(msecs)03d %(message)s', datefmt='%H:%M:%S', level=logging.DEBUG, stream=sys.stderr)
     if ng_deg is None:
         ng_deg = [6, 4, 2]
     if ng_sig is None:

@@ -1,5 +1,8 @@
 import numpy as np
+import numba
 import math
+import logging
+logger = logging.getLogger('hotpants')
 
 ZEROVAL = 1e-10
 MAXVAL = 1e10
@@ -1264,53 +1267,111 @@ def xy_conv_stamp_pca_numpy(stamp, image, n, ren, fwKSStamp, hwKSStamp,
             stamp['vectors'][n][i] -= stamp['vectors'][0][i]
 
 
-def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
+# def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
+#     ncomp1 = nCompKer
+#     pixStamp = fwKSStamp * fwKSStamp
+#     vec = stamp['vectors']
+# 
+#     for i in range(ncomp1):
+#         for j in range(i + 1):
+#             q = 0.0
+#             for k in range(pixStamp):
+#                 q += vec[i][k] * vec[j][k]
+#             stamp['mat'][i + 1][j + 1] = q
+# 
+#     ivecbg = 0
+#     for i1 in range(ncomp1):
+#         ivecbg = ncomp1
+#         p0 = 0.0
+#         for k in range(pixStamp):
+#             p0 += vec[i1][k] * vec[ivecbg][k]
+#         stamp['mat'][ncomp1 + 1][i1 + 1] = p0
+# 
+#     q = 0.0
+#     for k in range(pixStamp):
+#         q += vec[ivecbg][k] * vec[ncomp1][k]
+#     stamp['mat'][ncomp1 + 1][ncomp1 + 1] = q
+
+
+@numba.jit(nopython=True)
+def build_matrix0_jit(vectors, mat, nCompKer, kerOrder, bgOrder, fwKSStamp):
     ncomp1 = nCompKer
     pixStamp = fwKSStamp * fwKSStamp
-    vec = stamp['vectors']
 
     for i in range(ncomp1):
         for j in range(i + 1):
             q = 0.0
             for k in range(pixStamp):
-                q += vec[i][k] * vec[j][k]
-            stamp['mat'][i + 1][j + 1] = q
+                q += vectors[i, k] * vectors[j, k]
+            mat[i + 1, j + 1] = q
 
-    ivecbg = 0
+    ivecbg = ncomp1
     for i1 in range(ncomp1):
-        ivecbg = ncomp1
         p0 = 0.0
         for k in range(pixStamp):
-            p0 += vec[i1][k] * vec[ivecbg][k]
-        stamp['mat'][ncomp1 + 1][i1 + 1] = p0
+            p0 += vectors[i1, k] * vectors[ivecbg, k]
+        mat[ncomp1 + 1, i1 + 1] = p0
 
     q = 0.0
     for k in range(pixStamp):
-        q += vec[ivecbg][k] * vec[ncomp1][k]
-    stamp['mat'][ncomp1 + 1][ncomp1 + 1] = q
+        q += vectors[ivecbg, k] * vectors[ncomp1, k]
+    mat[ncomp1 + 1, ncomp1 + 1] = q
 
 
-def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
-                         fwKSStamp, hwKSStamp, rPixX):
+def build_matrix0_numpy(stamp, nCompKer, kerOrder, bgOrder, fwKSStamp):
+    build_matrix0_jit(stamp['vectors'], stamp['mat'], nCompKer, kerOrder, bgOrder, fwKSStamp)
+
+
+# def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
+#                          fwKSStamp, hwKSStamp, rPixX):
+#     ncomp1 = nCompKer
+#     vec = stamp['vectors']
+#     xi = int(stamp['xss'][stamp['sscnt']])
+#     yi = int(stamp['yss'][stamp['sscnt']])
+# 
+#     for i1 in range(ncomp1):
+#         p0 = 0.0
+#         for xc in range(-hwKSStamp, hwKSStamp + 1):
+#             for yc in range(-hwKSStamp, hwKSStamp + 1):
+#                 k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+#                 p0 += vec[i1][k] * float(image[xc + xi + rPixX * (yc + yi)])
+#         stamp['scprod'][i1 + 1] = p0
+# 
+#     q = 0.0
+#     for xc in range(-hwKSStamp, hwKSStamp + 1):
+#         for yc in range(-hwKSStamp, hwKSStamp + 1):
+#             k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+#             q += vec[ncomp1][k] * float(image[xc + xi + rPixX * (yc + yi)])
+#     stamp['scprod'][ncomp1 + 1] = q
+
+
+@numba.jit(nopython=True)
+def build_scprod0_jit(vectors, scprod, image, nCompKer, xi, yi, fwKSStamp, hwKSStamp, rPixX):
     ncomp1 = nCompKer
-    vec = stamp['vectors']
-    xi = int(stamp['xss'][stamp['sscnt']])
-    yi = int(stamp['yss'][stamp['sscnt']])
 
     for i1 in range(ncomp1):
         p0 = 0.0
         for xc in range(-hwKSStamp, hwKSStamp + 1):
             for yc in range(-hwKSStamp, hwKSStamp + 1):
                 k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-                p0 += vec[i1][k] * float(image[xc + xi + rPixX * (yc + yi)])
-        stamp['scprod'][i1 + 1] = p0
+                p0 += vectors[i1, k] * image[xc + xi + rPixX * (yc + yi)]
+        scprod[i1 + 1] = p0
 
     q = 0.0
     for xc in range(-hwKSStamp, hwKSStamp + 1):
         for yc in range(-hwKSStamp, hwKSStamp + 1):
             k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-            q += vec[ncomp1][k] * float(image[xc + xi + rPixX * (yc + yi)])
-    stamp['scprod'][ncomp1 + 1] = q
+            q += vectors[ncomp1, k] * image[xc + xi + rPixX * (yc + yi)]
+    scprod[ncomp1 + 1] = q
+
+
+def build_scprod0_numpy(stamp, image, nCompKer, kerOrder, bgOrder,
+                         fwKSStamp, hwKSStamp, rPixX):
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+    image_arr = np.asarray(image, dtype=np.float64)
+    build_scprod0_jit(stamp['vectors'], stamp['scprod'], image_arr,
+                      nCompKer, xi, yi, fwKSStamp, hwKSStamp, rPixX)
 
 
 def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
@@ -2173,16 +2234,20 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
 
     wxy = np.zeros((nS, ncomp2), dtype=np.float64)
 
+    iter_count = 0
+    logger.debug("  fitKernel: iteration %d start", iter_count)
     matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
                                 fwKSStamp, rPixX, rPixY, verbose, wxy)
     kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
                                    fwKSStamp, hwKSStamp, rPixX, wxy)
+    logger.debug("  fitKernel: build_matrix0+scprod0 done")
 
     # indx = np.zeros(mat_size + 1, dtype=np.int32)
     # ludcmp_numpy(matrix, mat_size, indx)
     # lubksb_numpy(matrix, mat_size, indx, kernelSol)
     kernelSol[1:mat_size+1] = np.linalg.solve(
         matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
+    logger.debug("  fitKernel: solve done")
 
     check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
         stamps_dicts, kernelSol, imConv, imRef, imNoise,
@@ -2191,20 +2256,25 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
         nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
         hwKernel, fwKernel, usePCA, filter_x, filter_y,
         PCA, fillVal)
+    logger.debug("  fitKernel: check_again done, check=%s", check)
 
     while check:
+        iter_count += 1
+        logger.debug("  fitKernel: iteration %d start", iter_count)
         wxy = np.zeros((nS, ncomp2), dtype=np.float64)
 
         matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
                                     fwKSStamp, rPixX, rPixY, verbose, wxy)
         kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
                                        fwKSStamp, hwKSStamp, rPixX, wxy)
+        logger.debug("  fitKernel: build_matrix+scprod done")
 
         # indx = np.zeros(mat_size + 1, dtype=np.int32)
         # ludcmp_numpy(matrix, mat_size, indx)
         # lubksb_numpy(matrix, mat_size, indx, kernelSol)
         kernelSol[1:mat_size+1] = np.linalg.solve(
             matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
+        logger.debug("  fitKernel: solve done")
 
         check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
             stamps_dicts, kernelSol, imConv, imRef, imNoise,
@@ -2213,6 +2283,7 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
             nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
             hwKernel, fwKernel, usePCA, filter_x, filter_y,
             PCA, fillVal)
+        logger.debug("  fitKernel: check_again done, check=%s", check)
 
     return {
         'kernelSol': kernelSol,
@@ -2252,6 +2323,7 @@ def make_noise_image4_numpy(data1d, invGain, quad, rPixX, rPixY):
 
 def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConvolve):
     import sys
+    logger.debug("region_buildstamps_numpy start")
 
     nCompKer = ctx_info['nCompKer']
     nBGVectors = ctx_info['nBGVectors']
@@ -2442,6 +2514,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
     kernel_vec = get_kernel_vec_numpy(ngauss, deg_fixe, usePCA, fwKernel, hwKernel,
                                       sigma_gauss, filter_x, filter_y, PCA)
 
+    logger.debug("region_buildstamps_numpy done")
     return {
         'niS': niS, 'ntS': ntS,
         'ctStamps': ctStamps,
@@ -2455,6 +2528,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
 def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, localForceConvolve):
     import sys
+    logger.debug("region_fit_numpy start")
 
     nCompKer = ctx_info['nCompKer']
     nBGVectors = ctx_info['nBGVectors']
@@ -2551,6 +2625,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     else:
         convTmpl = 0
 
+    logger.debug("region_fit_numpy done, convTmpl=%s", convTmpl)
     return {
         'convTmpl': convTmpl,
         'tMerit': tMerit,
@@ -2648,6 +2723,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         sys.stderr.write("\n\n Region %d:%d,%d:%d : Convolving TEMPLATE\n" % (rXMin, rXMax, rYMin, rYMax))
         nS = ntS
 
+        logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
         oRData1d = setup_result['oRData'].ravel().copy()
         fit_result_k = fit_kernel_numpy(
             ctStamps, iRData1d, tRData1d, oRData1d,
@@ -2662,6 +2738,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         ctStamps = fit_result_k['stamps']
         kerSol = tKerSol
 
+        logger.debug("[region %d] convolve_diff: fitKernel done", region_idx)
+        logger.debug("[region %d] convolve_diff: realloc+mask start", region_idx)
         oRData1d = np.full(rPixX * rPixY, fillVal, dtype=np.float32)
 
         for idx in range(rPixX * rPixY):
@@ -2671,6 +2749,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         mRData1d[:] = 0
 
+        logger.debug("[region %d] convolve_diff: realloc+mask done", region_idx)
+        logger.debug("[region %d] convolve_diff: noise rebuild start", region_idx)
         eRData1d = np.full(rPixX * rPixY, fillValNoise, dtype=np.float32)
         if tnoise_2d is not None:
             eRData1d[:] = tnoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
@@ -2678,6 +2758,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         else:
             eRData1d = make_noise_image4_numpy(tRData1d, 1.0 / tGain, tRdnoise / tGain, rPixX, rPixY)
 
+        logger.debug("[region %d] convolve_diff: noise rebuild done", region_idx)
+        logger.debug("[region %d] convolve_diff: spatial_convolve start", region_idx)
         sys.stderr.write("\n Convolving...\n")
         # vData = spatial_convolve_numpy(
         #     tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
@@ -2697,11 +2779,15 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         if vData is not None:
             eRData1d = vData
 
+        logger.debug("[region %d] convolve_diff: spatial_convolve done", region_idx)
+        logger.debug("[region %d] convolve_diff: background start", region_idx)
         for l in range(hwKernel, rPixY - hwKernel):
             for k in range(hwKernel, rPixX - hwKernel):
                 oRData1d[k + rPixX * l] += get_background_numpy(
                     k, l, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
 
+        logger.debug("[region %d] convolve_diff: background done", region_idx)
+        logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
         sumKernel = make_kernel_numpy(rXMin, rYMin, tKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
         sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMin, rYMin, sumKernel))
@@ -2712,6 +2798,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
         sys.stderr.write(" Using Kernel Sum = %f\n\n" % sumKernel)
 
+        logger.debug("[region %d] convolve_diff: make_kernel done", region_idx)
+        logger.debug("[region %d] convolve_diff: noise_combine start", region_idx)
         tRData1d[:] = fillValNoise
         if inoise_2d is not None:
             tRData1d[:] = inoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
@@ -2729,6 +2817,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
             mRData1d[idx] |= misRData1d[idx]
             mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((misRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
 
+        logger.debug("[region %d] convolve_diff: noise_combine done", region_idx)
         if savexyflag:
             for si in range(ntS):
                 for sc in range(ctStamps[si]['nss']):
@@ -2752,6 +2841,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         sys.stderr.write("\n\n Region %d,%d %d,%d : Convolving IMAGE\n" % (rXMin, rXMax, rYMin, rYMax))
         nS = niS
 
+        logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
         oRData1d = setup_result['oRData'].ravel().copy()
         fit_result_k = fit_kernel_numpy(
             ciStamps, tRData1d, iRData1d, oRData1d,
@@ -2766,6 +2856,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         ciStamps = fit_result_k['stamps']
         kerSol = iKerSol
 
+        logger.debug("[region %d] convolve_diff: fitKernel done", region_idx)
+        logger.debug("[region %d] convolve_diff: realloc+mask start", region_idx)
         oRData1d = np.full(rPixX * rPixY, fillVal, dtype=np.float32)
 
         for idx in range(rPixX * rPixY):
@@ -2775,6 +2867,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         mRData1d[:] = 0
 
+        logger.debug("[region %d] convolve_diff: realloc+mask done", region_idx)
+        logger.debug("[region %d] convolve_diff: noise rebuild start", region_idx)
         eRData1d = np.full(rPixX * rPixY, fillValNoise, dtype=np.float32)
         if inoise_2d is not None:
             eRData1d[:] = inoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
@@ -2782,6 +2876,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         else:
             eRData1d = make_noise_image4_numpy(iRData1d, 1.0 / iGain, iRdnoise / iGain, rPixX, rPixY)
 
+        logger.debug("[region %d] convolve_diff: noise rebuild done", region_idx)
+        logger.debug("[region %d] convolve_diff: spatial_convolve start", region_idx)
         sys.stderr.write("\n Convolving...\n")
         # vData = spatial_convolve_numpy(
         #     iRData1d, eRData1d, rPixX, rPixY, iKerSol, oRData1d, misRData1d,
@@ -2801,11 +2897,15 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         if vData is not None:
             eRData1d = vData
 
+        logger.debug("[region %d] convolve_diff: spatial_convolve done", region_idx)
+        logger.debug("[region %d] convolve_diff: background start", region_idx)
         for l in range(hwKernel, rPixY - hwKernel):
             for k in range(hwKernel, rPixX - hwKernel):
                 oRData1d[k + rPixX * l] += get_background_numpy(
                     k, l, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
 
+        logger.debug("[region %d] convolve_diff: background done", region_idx)
+        logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
         sumKernel = make_kernel_numpy(rXMin, rYMin, iKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
         sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMin, rYMin, sumKernel))
@@ -2816,6 +2916,8 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
         sys.stderr.write(" Using Kernel Sum = %f\n\n" % sumKernel)
 
+        logger.debug("[region %d] convolve_diff: make_kernel done", region_idx)
+        logger.debug("[region %d] convolve_diff: noise_combine start", region_idx)
         iRData1d[:] = fillValNoise
         if tnoise_2d is not None:
             iRData1d[:] = tnoise_2d[rYBMin:rYBMax + 1, rXBMin:rXBMax + 1].ravel()
@@ -2833,6 +2935,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
             mRData1d[idx] |= mtsRData1d[idx]
             mRData1d[idx] |= FLAG_OUTPUT_ISBAD * int((mtsRData1d[idx] & FLAG_INPUT_ISBAD) > 0)
 
+        logger.debug("[region %d] convolve_diff: noise_combine done", region_idx)
         if savexyflag:
             for si in range(niS):
                 for sc in range(ciStamps[si]['nss']):
@@ -2880,6 +2983,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                          diff_out, noise_out, conv_out, mask_out,
                          ctx_info, params_info, region_idx, stats_list):
     import sys
+    logger.debug("[region %d] region_output_numpy start", region_idx)
 
     nCompKer = ctx_info['nCompKer']
     nBGVectors = ctx_info['nBGVectors']
@@ -3144,4 +3248,5 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
 
     sys.stderr.write("Region %i finished\n\n" % region_idx)
 
+    logger.debug("[region %d] region_output_numpy done", region_idx)
     return stats
