@@ -217,31 +217,33 @@ def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
 #     return (mean_val, stdev_val, 0)
 
 
+@numba.jit(nopython=True)
 def get_noise_stats3_numpy(data, noise, umask, smask, rPixX, rPixY, mRData):
     """返回 (nnorm, nncount)"""
     nsum = 0.0
     n = 0
     total = rPixX * rPixY
+    ZVAL = 1e-10
     data_flat = data.ravel()
     noise_flat = noise.ravel()
     mRData_flat = mRData.ravel()
 
     for i in range(total - 1, -1, -1):
-        ddat = np.float32(data_flat[i])
-        mdat = int(mRData_flat[i])
+        ddat = data_flat[i]
+        mdat = mRData_flat[i]
 
-        if ((umask > 0) and not (mdat & umask)) or \
+        if ((umask > 0) and (not (mdat & umask))) or \
            ((smask > 0) and (mdat & smask)) or \
-           (abs(float(ddat)) <= ZEROVAL):
+           (abs(ddat) <= ZVAL):
             continue
 
-        ndat = np.float32(1.0 / float(noise_flat[i]))
+        ndat = 1.0 / noise_flat[i]
         n += 1
-        prod = np.float32(np.float32(np.float32(ddat * ddat) * ndat) * ndat)
-        nsum += float(prod)
+        prod = (ddat * ddat) * ndat * ndat
+        nsum += prod
 
     if n > 1:
-        return (nsum / float(n), n)
+        return (nsum / n, n)
     else:
         return (MAXVAL, n)
 
@@ -539,6 +541,8 @@ def bin_quartile_numpy(counts, target):
 
 def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
                                  umask, smask, maxiter, rPixX, mRData_2d, statSig):
+    import time
+    t0 = time.time()
     nstat = 100
     ufstat = 0.9
     mfstat = 0.5
@@ -589,15 +593,20 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
     if smask > 0:
         skip_all |= (mRData_region & smask) != 0
     skip_all |= np.abs(data_flat) <= ZEROVAL
+    t_skip = time.time()
 
     nan_mask = np.isnan(data_flat)
     skip_all |= nan_mask
+    t_nan = time.time()
 
     if nan_mask.any():
         nan_y, nan_x = np.where(nan_mask.reshape(nPixY, nPixX))
         mRData_2d[nan_y + y0Reg, nan_x + x0Reg] |= (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+    t_where = time.time()
 
     sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
+    t1 = time.time(); logger.debug("[stats3] skip=%.3fs nan=%.3fs where=%.3fs sdat=%.3fs total_setup=%.3fs",
+        t_skip - t0, t_nan - t_skip, t_where - t_nan, t1 - t_where, t1 - t0)
     if len(sdat) == 0:
         mode_val = 0.0
         if nfound > 0:
@@ -605,7 +614,9 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         return {'sum': 0.0, 'mean': 0.0, 'median': mode_val, 'mode': mode_val,
                 'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
 
+    t2 = time.time()
     mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat, maxiter, statSig)
+    t3 = time.time(); logger.debug("[stats3] sigma_clip %.3fs", t3 - t2)
     if sc_rc != 0:
         return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
                 'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
@@ -696,6 +707,7 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         else:
             break
 
+    t4 = time.time(); logger.debug("[stats3] binning loop %.3fs", t4 - t3)
     fwhm_val = current_binsize * (upper_val - lower_val) / 1.35
 
     median_target = goodcnt_h / 2.0
