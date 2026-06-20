@@ -1021,6 +1021,46 @@ def xy_conv_stamp_numpy(stamp, image, n, ren, usePCA, fwKSStamp, fwKernel,
             stamp['vectors'][n][i] -= stamp['vectors'][0][i]
 
 
+def xy_conv_stamp_fast_numpy(stamp, image, nvecTotal, renFlags, usePCA, fwKSStamp, fwKernel,
+                              hwKSStamp, hwKernel, rPixX, filterX, filterY, temp, PCA):
+    if usePCA:
+        for n in range(nvecTotal):
+            xy_conv_stamp_pca_numpy(stamp, image, n, renFlags[n], fwKSStamp, hwKSStamp,
+                                    hwKernel, fwKernel, rPixX, PCA)
+        return
+
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+
+    iCenters = np.arange(xi - hwKSStamp, xi + hwKSStamp + 1)
+    jCenters = np.arange(yi - hwKSStamp, yi + hwKSStamp + 1)
+    xcOffsets = np.arange(-hwKernel, hwKernel + 1)
+    ycOffsets = np.arange(-hwKernel, hwKernel + 1)
+
+    xPart = iCenters[None, :, None, None] + xcOffsets[None, None, None, :]
+    yPart = jCenters[:, None, None, None] + ycOffsets[None, None, :, None]
+    flatIdx = (xPart + rPixX * yPart).ravel()
+
+    imageArr = np.asarray(image, dtype=np.float32)
+    patches = imageArr[flatIdx].reshape(fwKSStamp * fwKSStamp, fwKernel * fwKernel)
+    patches64 = patches.astype(np.float64)
+
+    fxArr = np.asarray(filterX, dtype=np.float64)
+    fyArr = np.asarray(filterY, dtype=np.float64)
+    fxAll = fxArr[:nvecTotal * fwKernel].reshape(nvecTotal, fwKernel)[:, ::-1]
+    fyAll = fyArr[:nvecTotal * fwKernel].reshape(nvecTotal, fwKernel)[:, ::-1]
+
+    kernels = fyAll[:, :, None] * fxAll[:, None, :]
+    kernels = kernels.reshape(nvecTotal, fwKernel * fwKernel)
+
+    result = kernels @ patches64.T
+
+    for n in range(nvecTotal):
+        if renFlags[n]:
+            result[n] -= result[0]
+        stamp['vectors'][n][:fwKSStamp * fwKSStamp] = result[n]
+
+
 def xy_conv_stamp_pca_numpy(stamp, image, n, ren, fwKSStamp, hwKSStamp,
                              hwKernel, fwKernel, rPixX, PCA):
     xi = int(stamp['xss'][stamp['sscnt']])
@@ -1274,6 +1314,7 @@ def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, d
     temp = np.zeros(sub_width * fwKSStamp, dtype=np.float32)
 
     nvec = 0
+    renFlags = []
     for ig in range(ngauss):
         for idegx in range(int(deg_fixe[ig]) + 1):
             for idegy in range(int(deg_fixe[ig]) - idegx + 1):
@@ -1282,10 +1323,14 @@ def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, d
                 dy = (idegy // 2) * 2 - idegy
                 if dx == 0 and dy == 0 and nvec > 0:
                     ren = 1
-                xy_conv_stamp_numpy(stamp_dict, imConv, nvec, ren, usePCA,
-                                    fwKSStamp, fwKernel, hwKSStamp, hwKernel,
-                                    rPixX, filter_x, filter_y, temp, PCA)
+                # xy_conv_stamp_numpy(stamp_dict, imConv, nvec, ren, usePCA,
+                #                     fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+                #                     rPixX, filter_x, filter_y, temp, PCA)
+                renFlags.append(ren)
                 nvec += 1
+    xy_conv_stamp_fast_numpy(stamp_dict, imConv, nvec, renFlags, usePCA,
+                              fwKSStamp, fwKernel, hwKSStamp, hwKernel,
+                              rPixX, filter_x, filter_y, temp, PCA)
 
     if cut_sstamp_numpy(stamp_dict, imRef, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose):
         return 1
