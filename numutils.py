@@ -1749,17 +1749,23 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
         j0 = blockJ * kcStep + hwKernel
         make_kernel_numpy(i0 + hwKernel, j0 + hwKernel, kernelSol, rPixX, rPixY,
                           nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        aks = 0.0
-        uks = 0.0
-        for jc in range(j - hwKernel, j + hwKernel + 1):
-            jk = j - jc + hwKernel
-            for ic in range(i - hwKernel, i + hwKernel + 1):
-                ik = i - ic + hwKernel
-                nc = ic + xSize * jc
-                kk = abs(float(kernel[ik + jk * fwKernel]))
-                aks += kk
-                if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
-                    uks += kk
+        # aks = 0.0
+        # uks = 0.0
+        # for jc in range(j - hwKernel, j + hwKernel + 1):
+        #     jk = j - jc + hwKernel
+        #     for ic in range(i - hwKernel, i + hwKernel + 1):
+        #         ik = i - ic + hwKernel
+        #         nc = ic + xSize * jc
+        #         kk = abs(float(kernel[ik + jk * fwKernel]))
+        #         aks += kk
+        #         if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
+        #             uks += kk
+        # 矢量化内层循环
+        kern2d = np.abs(kernel[:fwSq].reshape(fwKernel, fwKernel))[::-1, ::-1]
+        cmask_patch = cMaskView[j-hwKernel:j+hwKernel+1, i-hwKernel:i+hwKernel+1]
+        bad_patch = (cmask_patch.astype(np.int32) & FLAG_INPUT_ISBAD) > 0
+        aks = float(kern2d.sum())
+        uks = float(kern2d[~bad_patch].sum())
         ni = i + xSize * j
         if aks > 0.0 and (uks / aks) < kerFracMask:
             mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
@@ -1787,7 +1793,7 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
     for i in range(nS):
         check_mat = np.zeros((nComps + 1, nComps + 1), dtype=np.float64)
         check_vec = np.zeros(nComps + 1, dtype=np.float64)
-        indx = np.zeros(nComps + 1, dtype=np.int32)
+        # indx = np.zeros(nComps + 1, dtype=np.int32)
 
         for im in range(1, nComps + 1):
             check_vec[im] = stamps_dicts[i]['scprod'][im]
@@ -1795,9 +1801,11 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
                 check_mat[im, jm] = stamps_dicts[i]['mat'][im, jm]
                 check_mat[jm, im] = check_mat[im, jm]
 
-        d = 0.0
-        ludcmp_numpy(check_mat, nComps, indx)
-        lubksb_numpy(check_mat, nComps, indx, check_vec)
+        # d = 0.0
+        # ludcmp_numpy(check_mat, nComps, indx)
+        # lubksb_numpy(check_mat, nComps, indx, check_vec)
+        check_vec[1:nComps+1] = np.linalg.solve(
+            check_mat[1:nComps+1, 1:nComps+1], check_vec[1:nComps+1])
 
         sum_val = check_vec[1]
         stamps_dicts[i]['norm'] = sum_val
@@ -1830,9 +1838,11 @@ def check_stamps_numpy(stamps_dicts, nS, imRef, imNoise, nCompKer, kerOrder, bgO
         testKerSol = build_scprod_numpy(testStamps, ntestStamps, imRef, nCompKer, kerOrder,
                                         bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy)
 
-        indx2 = np.zeros(mat_size + 1, dtype=np.int32)
-        ludcmp_numpy(matrix, mat_size, indx2)
-        lubksb_numpy(matrix, mat_size, indx2, testKerSol)
+        # indx2 = np.zeros(mat_size + 1, dtype=np.int32)
+        # ludcmp_numpy(matrix, mat_size, indx2)
+        # lubksb_numpy(matrix, mat_size, indx2, testKerSol)
+        testKerSol[1:mat_size+1] = np.linalg.solve(
+            matrix[1:mat_size+1, 1:mat_size+1], testKerSol[1:mat_size+1])
 
         kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
         kernel_arr = np.zeros(fwKernel * fwKernel, dtype=np.float64)
@@ -1985,9 +1995,11 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
     kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
                                    fwKSStamp, hwKSStamp, rPixX, wxy)
 
-    indx = np.zeros(mat_size + 1, dtype=np.int32)
-    ludcmp_numpy(matrix, mat_size, indx)
-    lubksb_numpy(matrix, mat_size, indx, kernelSol)
+    # indx = np.zeros(mat_size + 1, dtype=np.int32)
+    # ludcmp_numpy(matrix, mat_size, indx)
+    # lubksb_numpy(matrix, mat_size, indx, kernelSol)
+    kernelSol[1:mat_size+1] = np.linalg.solve(
+        matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
 
     check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
         stamps_dicts, kernelSol, imConv, imRef, imNoise,
@@ -2005,9 +2017,11 @@ def fit_kernel_numpy(stamps_dicts, imRef, imConv, imNoise, nCompKer, kerOrder, b
         kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
                                        fwKSStamp, hwKSStamp, rPixX, wxy)
 
-        indx = np.zeros(mat_size + 1, dtype=np.int32)
-        ludcmp_numpy(matrix, mat_size, indx)
-        lubksb_numpy(matrix, mat_size, indx, kernelSol)
+        # indx = np.zeros(mat_size + 1, dtype=np.int32)
+        # ludcmp_numpy(matrix, mat_size, indx)
+        # lubksb_numpy(matrix, mat_size, indx, kernelSol)
+        kernelSol[1:mat_size+1] = np.linalg.solve(
+            matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
 
         check, meansigSubstamps, scatterSubstamps, nskippedSubstamps = check_again_numpy(
             stamps_dicts, kernelSol, imConv, imRef, imNoise,
