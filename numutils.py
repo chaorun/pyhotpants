@@ -2116,11 +2116,78 @@ def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMa
                         else:
                             mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
 
+    logger.debug("    sc_fast: mask loop done")
     return vData
     # return spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
     #                                    hwKernel, fwKernel, kernel, kernel_coeffs,
     #                                    convolveVariance, kerFracMask, mRData,
     #                                    rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+
+
+@numba.jit(nopython=True)
+def mask_check_loop_jit(maskPixY, maskPixX, cMask2d, mRData1d,
+                         kernelSol, kernel_vec_2d,
+                         nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
+                         rPixX, rPixY, xSize, ySize, kerFracMask):
+    fwSq = fwKernel * fwKernel
+    halfX = np.float64(0.5 * rPixX)
+    halfY = np.float64(0.5 * rPixY)
+    FLAG_INPUT_ISBAD = np.int32(0x80)
+    FLAG_OUTPUT_ISBAD = np.int32(0x8000)
+    FLAG_BAD_CONV = np.int32(0x10)
+    FLAG_OK_CONV = np.int32(0x40)
+    nTerms = (kerOrder + 1) * (kerOrder + 2) // 2
+
+    for pidx in range(len(maskPixY)):
+        j = maskPixY[pidx]
+        i = maskPixX[pidx]
+
+        blockI = (i - hwKernel) // kcStep
+        i0 = blockI * kcStep + hwKernel
+        blockJ = (j - hwKernel) // kcStep
+        j0 = blockJ * kcStep + hwKernel
+
+        xi = np.float64(i0 + hwKernel)
+        yi = np.float64(j0 + hwKernel)
+        xf = (xi - halfX) / halfX
+        yf = (yi - halfY) / halfY
+
+        kernel = np.zeros(fwSq, dtype=np.float64)
+
+        coeff0 = kernelSol[1]
+        for jj in range(fwSq):
+            kernel[jj] = coeff0 * kernel_vec_2d[0, jj]
+
+        ksol = 2
+        for ig in range(1, nCompKer):
+            coeff = np.float64(0.0)
+            ax = np.float64(1.0)
+            for ix in range(kerOrder + 1):
+                ay = np.float64(1.0)
+                for iy in range(kerOrder - ix + 1):
+                    coeff += kernelSol[ksol] * ax * ay
+                    ksol += 1
+                    ay *= yf
+                ax *= xf
+            for jj in range(fwSq):
+                kernel[jj] += coeff * kernel_vec_2d[ig, jj]
+
+        aks = np.float64(0.0)
+        uks = np.float64(0.0)
+        for jc in range(fwKernel):
+            cy = j - hwKernel + jc
+            for ic in range(fwKernel):
+                cx = i - hwKernel + ic
+                kk = abs(kernel[(fwKernel - 1 - ic) + (fwKernel - 1 - jc) * fwKernel])
+                aks += kk
+                if not (cMask2d[cy, cx] & FLAG_INPUT_ISBAD):
+                    uks += kk
+
+        ni = i + xSize * j
+        if aks > 0.0 and (uks / aks) < kerFracMask:
+            mRData1d[ni] = mRData1d[ni] | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
+        else:
+            mRData1d[ni] = mRData1d[ni] | FLAG_OK_CONV
 
 
 def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
@@ -2140,10 +2207,12 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
 
     basisList = []
     convMaps = []
+    logger.debug("    sc_fast: FFT convolve start (%d bases)", nCompKer)
     for idx in range(nCompKer):
         basis = np.asarray(kernel_vec[idx][:fwSq], dtype=np.float64).reshape(fwKernel, fwKernel)
         basisList.append(basis)
         convMaps.append(fftconvolve(image2d, basis, mode='same'))
+    logger.debug("    sc_fast: FFT convolve done")
 
     halfX = 0.5 * rPixX
     halfY = 0.5 * rPixY
@@ -2173,6 +2242,7 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
                 k += 1
         coeffFields.append(cf)
         output += cf * convMaps[i1]
+    logger.debug("    sc_fast: coeff fields + weighted sum done")
 
     sy = slice(hwKernel, ySize - hwKernel)
     sx = slice(hwKernel, xSize - hwKernel)
@@ -2213,41 +2283,50 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cRdata
     maskPixY, maskPixX = np.where(badCountField[sy, sx] > 0)
     maskPixY += hwKernel
     maskPixX += hwKernel
+    logger.debug("    sc_fast: bad_count done, %d pixels to check", len(maskPixY))
 
-    for pidx in range(len(maskPixY)):
-        j = int(maskPixY[pidx])
-        i = int(maskPixX[pidx])
-        # make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
-        #                   nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        blockI = (i - hwKernel) // kcStep
-        i0 = blockI * kcStep + hwKernel
-        blockJ = (j - hwKernel) // kcStep
-        j0 = blockJ * kcStep + hwKernel
-        make_kernel_numpy(i0 + hwKernel, j0 + hwKernel, kernelSol, rPixX, rPixY,
-                          nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        # aks = 0.0
-        # uks = 0.0
-        # for jc in range(j - hwKernel, j + hwKernel + 1):
-        #     jk = j - jc + hwKernel
-        #     for ic in range(i - hwKernel, i + hwKernel + 1):
-        #         ik = i - ic + hwKernel
-        #         nc = ic + xSize * jc
-        #         kk = abs(float(kernel[ik + jk * fwKernel]))
-        #         aks += kk
-        #         if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
-        #             uks += kk
-        # 矢量化内层循环
-        kern2d = np.abs(kernel[:fwSq].reshape(fwKernel, fwKernel))[::-1, ::-1]
-        cmask_patch = cMaskView[j-hwKernel:j+hwKernel+1, i-hwKernel:i+hwKernel+1]
-        bad_patch = (cmask_patch.astype(np.int32) & FLAG_INPUT_ISBAD) > 0
-        aks = float(kern2d.sum())
-        uks = float(kern2d[~bad_patch].sum())
-        ni = i + xSize * j
-        if aks > 0.0 and (uks / aks) < kerFracMask:
-            mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
-        else:
-            mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
+    # for pidx in range(len(maskPixY)):
+    #     j = int(maskPixY[pidx])
+    #     i = int(maskPixX[pidx])
+    #     # make_kernel_numpy(i + hwKernel, j + hwKernel, kernelSol, rPixX, rPixY,
+    #     #                   nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+    #     blockI = (i - hwKernel) // kcStep
+    #     i0 = blockI * kcStep + hwKernel
+    #     blockJ = (j - hwKernel) // kcStep
+    #     j0 = blockJ * kcStep + hwKernel
+    #     make_kernel_numpy(i0 + hwKernel, j0 + hwKernel, kernelSol, rPixX, rPixY,
+    #                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
+    #     # aks = 0.0
+    #     # uks = 0.0
+    #     # for jc in range(j - hwKernel, j + hwKernel + 1):
+    #     #     jk = j - jc + hwKernel
+    #     #     for ic in range(i - hwKernel, i + hwKernel + 1):
+    #     #         ik = i - ic + hwKernel
+    #     #         nc = ic + xSize * jc
+    #     #         kk = abs(float(kernel[ik + jk * fwKernel]))
+    #     #         aks += kk
+    #     #         if not (int(cMask[nc]) & FLAG_INPUT_ISBAD):
+    #     #             uks += kk
+    #     # 矢量化内层循环
+    #     kern2d = np.abs(kernel[:fwSq].reshape(fwKernel, fwKernel))[::-1, ::-1]
+    #     cmask_patch = cMaskView[j-hwKernel:j+hwKernel+1, i-hwKernel:i+hwKernel+1]
+    #     bad_patch = (cmask_patch.astype(np.int32) & FLAG_INPUT_ISBAD) > 0
+    #     aks = float(kern2d.sum())
+    #     uks = float(kern2d[~bad_patch].sum())
+    #     ni = i + xSize * j
+    #     if aks > 0.0 and (uks / aks) < kerFracMask:
+    #         mRData[ni] = int(mRData[ni]) | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
+    #     else:
+    #         mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
+    # jit version: inline make_kernel + mask check
+    fwSq = fwKernel * fwKernel
+    kernel_vec_2d = np.array([kernel_vec[idx][:fwSq] for idx in range(nCompKer)], dtype=np.float64)
+    mask_check_loop_jit(maskPixY, maskPixX, cMaskView, np.asarray(mRData),
+                         np.asarray(kernelSol), kernel_vec_2d,
+                         nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
+                         rPixX, rPixY, xSize, ySize, kerFracMask)
 
+    logger.debug("    sc_fast: mask loop done (fast)|(jit)")
     return vData
 
 
