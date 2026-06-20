@@ -160,8 +160,233 @@ class Ran1:
         return temp
 
 
+# def get_stamp_stats3_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
+#                             umask, smask, maxiter, rPixX, mRData_2d, statSig):
+#     nstat = 100
+#     ufstat = 0.9
+#     mfstat = 0.5
+# 
+#     npts = nPixX * nPixY
+#     if npts < nstat:
+#         return {'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
+#                 'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 4}
+# 
+#     rng = Ran1(-666)
+#     tries = 0
+# 
+#     goodcnt = 0
+#     work = [0.0] * nstat
+#     i = 0
+#     while (i < nstat) and (goodcnt < npts):
+#         xr = int(math.floor(rng() * nPixX))
+#         yr = int(math.floor(rng() * nPixY))
+# 
+#         rdat = float(data_2d[yr, xr])
+#         mdat = int(mRData_2d[yr + y0Reg, xr + x0Reg])
+# 
+#         if ((umask > 0) and not (mdat & umask)) or \
+#            ((smask > 0) and (mdat & smask)) or \
+#            (abs(rdat) <= ZEROVAL):
+#             pass
+#         else:
+#             work[i] = rdat
+#             i += 1
+#         goodcnt += 1
+# 
+#     work[:i] = sorted(work[:i])
+#     npts = i
+# 
+#     binsize = (work[int(ufstat * npts)] - work[int(mfstat * npts)]) / float(nstat)
+#     bin1 = work[int(mfstat * npts)] - 128.0 * binsize
+# 
+#     goodcnt = 0
+#     sdat = []
+#     for j in range(nPixY):
+#         for ci in range(nPixX):
+#             rdat = float(data_2d[j, ci])
+#             mdat = int(mRData_2d[j + y0Reg, ci + x0Reg])
+# 
+#             if ((umask > 0) and not (mdat & umask)) or \
+#                ((smask > 0) and (mdat & smask)) or \
+#                (abs(rdat) <= ZEROVAL):
+#                 continue
+# 
+#             if rdat * 0.0 != 0.0:
+#                 mRData_2d[j + y0Reg, ci + x0Reg] = int(mRData_2d[j + y0Reg, ci + x0Reg]) | (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+#                 continue
+# 
+#             sdat.append(rdat)
+#             goodcnt += 1
+# 
+#     sdat_arr = np.array(sdat, dtype=np.float32)
+#     mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat_arr, maxiter, statSig)
+#     if sc_rc != 0:
+#         return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
+#                 'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
+# 
+#     isd = 1.0 / sd_val
+# 
+#     repeat = 1
+#     ssum = 0.0
+#     lower_val = 0.0
+#     upper_val = 0.0
+#     mode_val = 0.0
+#     while repeat:
+#         if tries >= 5:
+#             return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
+#                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 1}
+# 
+#         bins = [0] * 256
+# 
+#         ssum = 0.0
+#         sumx = 0.0
+#         sumxx = 0.0
+#         goodcnt = 0
+# 
+#         for j in range(nPixY):
+#             for ci in range(nPixX):
+#                 rdat = float(data_2d[j, ci])
+#                 mdat = int(mRData_2d[j + y0Reg, ci + x0Reg])
+# 
+#                 if ((umask > 0) and not (mdat & umask)) or \
+#                    ((smask > 0) and (mdat & smask)) or \
+#                    (abs(rdat) <= ZEROVAL):
+#                     continue
+# 
+#                 if rdat * 0.0 != 0.0:
+#                     mRData_2d[j + y0Reg, ci + x0Reg] = int(mRData_2d[j + y0Reg, ci + x0Reg]) | (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+#                     continue
+# 
+#                 if (abs(rdat - mean_val) * isd) > statSig:
+#                     continue
+# 
+#                 index = int(math.floor((rdat - bin1) / binsize)) + 1
+#                 if index < 0:
+#                     index = 0
+#                 if index > 255:
+#                     index = 255
+# 
+#                 bins[index] += 1
+#                 ssum += abs(rdat)
+#                 goodcnt += 1
+# 
+#         if goodcnt == 0:
+#             mode_val = work[int(mfstat * npts)]
+#             median_val = mode_val
+#             return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
+#                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 2}
+# 
+#         if binsize == 0.0:
+#             mode_val = work[int(mfstat * npts)]
+#             median_val = mode_val
+#             return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
+#                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 3}
+# 
+#         sumx = 0.0
+#         maxdens = 0.0
+#         imax = 0
+#         ilower = 1
+#         iupper = 1
+#         while iupper < 255:
+#             while (sumx < goodcnt / 10.0) and (iupper < 255):
+#                 sumx += bins[iupper]
+#                 iupper += 1
+# 
+#             if (iupper - ilower) > 0 and sumx / (iupper - ilower) > maxdens:
+#                 maxdens = sumx / (iupper - ilower)
+#                 imax = ilower
+# 
+#             sumx -= bins[ilower]
+#             ilower += 1
+# 
+#         if imax < 0 or imax > 255:
+#             imax = 0
+# 
+#         sumxx = 0.0
+#         sumx = 0.0
+#         ci = imax
+#         while (sumx < goodcnt / 10.0) and (ci < 255):
+#             sumx += bins[ci]
+#             sumxx += ci * bins[ci]
+#             ci += 1
+# 
+#         mode_bin = sumxx / sumx + 0.5
+#         mode_val = bin1 + binsize * (mode_bin - 1.0)
+# 
+#         imax_floor = int(math.floor(mode_bin))
+#         sumx = 0.0
+#         for ci in range(imax_floor):
+#             sumx += bins[ci]
+#         sumx += bins[imax_floor] * (mode_bin - imax_floor)
+#         sumx /= goodcnt
+#         moden = sumx
+# 
+#         lower = goodcnt * 0.25
+#         upper = goodcnt * 0.75
+#         sumx = 0.0
+#         ci = 0
+#         while sumx < lower:
+#             sumx += bins[ci]
+#             ci += 1
+#         lower_val = ci - (sumx - lower) / bins[ci - 1]
+# 
+#         while sumx < upper:
+#             sumx += bins[ci]
+#             ci += 1
+#         upper_val = ci - (sumx - upper) / bins[ci - 1]
+# 
+#         if (lower_val < 1.0) or (upper_val > 255.0):
+#             bin1 -= 128.0 * binsize
+#             binsize *= 2.0
+#             tries += 1
+#             repeat = 1
+#         elif (upper_val - lower_val) < 40.0:
+#             binsize /= 3.0
+#             bin1 = mode_val - 128.0 * binsize
+#             tries += 1
+#             repeat = 1
+#         else:
+#             repeat = 0
+# 
+#     sum_val = ssum
+# 
+#     fwhm_val = binsize * (upper_val - lower_val) / 1.35
+# 
+#     sumx = 0.0
+#     ci = 0
+#     while sumx < goodcnt / 2.0:
+#         sumx += bins[ci]
+#         ci += 1
+#     median_val = ci - (sumx - goodcnt / 2.0) / bins[ci - 1]
+# 
+#     lfwhm_val = binsize * (median_val - lower_val) * 2.0 / 1.35
+# 
+#     median_val = bin1 + binsize * (median_val - 1.0)
+# 
+#     return {'sum': sum_val, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
+#             'sd': sd_val, 'fwhm': fwhm_val, 'lfwhm': lfwhm_val, 'return_code': 0}
+
+
 def get_stamp_stats3_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
                             umask, smask, maxiter, rPixX, mRData_2d, statSig):
+    return get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
+                                        umask, smask, maxiter, rPixX, mRData_2d, statSig)
+
+
+def bin_quartile_numpy(counts, target):
+    cumsum = np.cumsum(counts).astype(np.float64)
+    ci = int(np.searchsorted(cumsum, target))
+    if ci >= len(cumsum):
+        ci = len(cumsum) - 1
+    if counts[ci] > 0:
+        val = (ci + 1) - (cumsum[ci] - target) / counts[ci]
+    else:
+        val = float(ci + 1)
+    return val
+
+
+def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
+                                 umask, smask, maxiter, rPixX, mRData_2d, statSig):
     nstat = 100
     ufstat = 0.9
     mfstat = 0.5
@@ -171,199 +396,157 @@ def get_stamp_stats3_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         return {'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
                 'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 4}
 
-    rng = Ran1(-666)
-    tries = 0
+    np.random.seed(666)
+    flat_indices = np.random.randint(0, npts, size=nstat * 20)
+    xr = flat_indices % nPixX
+    yr = flat_indices // nPixX
 
-    goodcnt = 0
-    work = [0.0] * nstat
-    i = 0
-    while (i < nstat) and (goodcnt < npts):
-        xr = int(math.floor(rng() * nPixX))
-        yr = int(math.floor(rng() * nPixY))
+    rdat_sample = data_2d[yr, xr].astype(np.float64)
+    mdat_sample = mRData_2d[yr + y0Reg, xr + x0Reg]
 
-        rdat = float(data_2d[yr, xr])
-        mdat = int(mRData_2d[yr + y0Reg, xr + x0Reg])
+    skip_sample = np.zeros(len(flat_indices), dtype=bool)
+    if umask > 0:
+        skip_sample |= (mdat_sample & umask) == 0
+    if smask > 0:
+        skip_sample |= (mdat_sample & smask) != 0
+    skip_sample |= np.abs(rdat_sample) <= ZEROVAL
 
-        if ((umask > 0) and not (mdat & umask)) or \
-           ((smask > 0) and (mdat & smask)) or \
-           (abs(rdat) <= ZEROVAL):
-            pass
-        else:
-            work[i] = rdat
-            i += 1
-        goodcnt += 1
+    good_samples = rdat_sample[~skip_sample]
+    if len(good_samples) < nstat:
+        good_samples = rdat_sample[~skip_sample][:len(good_samples)]
+    else:
+        good_samples = good_samples[:nstat]
 
-    work[:i] = sorted(work[:i])
-    npts = i
+    work = np.sort(good_samples)
+    nfound = len(work)
 
-    binsize = (work[int(ufstat * npts)] - work[int(mfstat * npts)]) / float(nstat)
-    bin1 = work[int(mfstat * npts)] - 128.0 * binsize
+    binsize = (work[int(ufstat * nfound)] - work[int(mfstat * nfound)]) / float(nstat)
+    bin1 = work[int(mfstat * nfound)] - 128.0 * binsize
 
-    goodcnt = 0
-    sdat = []
-    for j in range(nPixY):
-        for ci in range(nPixX):
-            rdat = float(data_2d[j, ci])
-            mdat = int(mRData_2d[j + y0Reg, ci + x0Reg])
+    mRData_region = mRData_2d[y0Reg:y0Reg + nPixY, x0Reg:x0Reg + nPixX].ravel()
 
-            if ((umask > 0) and not (mdat & umask)) or \
-               ((smask > 0) and (mdat & smask)) or \
-               (abs(rdat) <= ZEROVAL):
-                continue
+    data_flat = data_2d.ravel().astype(np.float64)
+    ntotal = len(data_flat)
 
-            if rdat * 0.0 != 0.0:
-                mRData_2d[j + y0Reg, ci + x0Reg] = int(mRData_2d[j + y0Reg, ci + x0Reg]) | (FLAG_INPUT_ISBAD | FLAG_ISNAN)
-                continue
+    skip_all = np.zeros(ntotal, dtype=bool)
+    if umask > 0:
+        skip_all |= (mRData_region & umask) == 0
+    if smask > 0:
+        skip_all |= (mRData_region & smask) != 0
+    skip_all |= np.abs(data_flat) <= ZEROVAL
 
-            sdat.append(rdat)
-            goodcnt += 1
+    nan_mask = np.isnan(data_flat)
+    skip_all |= nan_mask
 
-    sdat_arr = np.array(sdat, dtype=np.float32)
-    mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat_arr, maxiter, statSig)
+    if nan_mask.any():
+        nan_y, nan_x = np.where(nan_mask.reshape(nPixY, nPixX))
+        mRData_2d[nan_y + y0Reg, nan_x + x0Reg] |= (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+
+    sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
+    if len(sdat) == 0:
+        mode_val = work[int(mfstat * nfound)]
+        return {'sum': 0.0, 'mean': 0.0, 'median': mode_val, 'mode': mode_val,
+                'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
+
+    mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat, maxiter, statSig)
     if sc_rc != 0:
         return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
                 'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
 
     isd = 1.0 / sd_val
+    clip_mask = (np.abs(sdat.astype(np.float64) - mean_val) * isd) > statSig
+    sdat_clipped = sdat[~clip_mask]
 
-    repeat = 1
-    ssum = 0.0
+    ssum_val = float(np.sum(np.abs(sdat_clipped.astype(np.float64))))
+
+    tries = 0
+    current_binsize = binsize
+    current_bin1 = bin1
     lower_val = 0.0
     upper_val = 0.0
     mode_val = 0.0
-    while repeat:
+    goodcnt_h = 0
+    bins = np.zeros(256, dtype=np.int64)
+
+    while True:
         if tries >= 5:
             return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 1}
 
-        bins = [0] * 256
-
-        ssum = 0.0
-        sumx = 0.0
-        sumxx = 0.0
-        goodcnt = 0
-
-        for j in range(nPixY):
-            for ci in range(nPixX):
-                rdat = float(data_2d[j, ci])
-                mdat = int(mRData_2d[j + y0Reg, ci + x0Reg])
-
-                if ((umask > 0) and not (mdat & umask)) or \
-                   ((smask > 0) and (mdat & smask)) or \
-                   (abs(rdat) <= ZEROVAL):
-                    continue
-
-                if rdat * 0.0 != 0.0:
-                    mRData_2d[j + y0Reg, ci + x0Reg] = int(mRData_2d[j + y0Reg, ci + x0Reg]) | (FLAG_INPUT_ISBAD | FLAG_ISNAN)
-                    continue
-
-                if (abs(rdat - mean_val) * isd) > statSig:
-                    continue
-
-                index = int(math.floor((rdat - bin1) / binsize)) + 1
-                if index < 0:
-                    index = 0
-                if index > 255:
-                    index = 255
-
-                bins[index] += 1
-                ssum += abs(rdat)
-                goodcnt += 1
-
-        if goodcnt == 0:
-            mode_val = work[int(mfstat * npts)]
+        if len(sdat_clipped) == 0:
+            mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
             return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 2}
 
-        if binsize == 0.0:
-            mode_val = work[int(mfstat * npts)]
+        if current_binsize == 0.0:
+            mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
             return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 3}
 
+        indices = ((sdat_clipped.astype(np.float64) - current_bin1) / current_binsize).astype(np.int32) + 1
+        indices = np.clip(indices, 0, 255)
+        bins.fill(0)
+        np.add.at(bins, indices, 1)
+        goodcnt_h = len(sdat_clipped)
+
+        target10 = goodcnt_h / 10.0
+
         sumx = 0.0
         maxdens = 0.0
-        imax = 0
+        imax_h = 0
         ilower = 1
         iupper = 1
         while iupper < 255:
-            while (sumx < goodcnt / 10.0) and (iupper < 255):
+            while (sumx < target10) and (iupper < 255):
                 sumx += bins[iupper]
                 iupper += 1
-
             if (iupper - ilower) > 0 and sumx / (iupper - ilower) > maxdens:
                 maxdens = sumx / (iupper - ilower)
-                imax = ilower
-
+                imax_h = ilower
             sumx -= bins[ilower]
             ilower += 1
 
-        if imax < 0 or imax > 255:
-            imax = 0
+        if imax_h < 0 or imax_h > 255:
+            imax_h = 0
 
         sumxx = 0.0
         sumx = 0.0
-        ci = imax
-        while (sumx < goodcnt / 10.0) and (ci < 255):
+        ci = imax_h
+        while (sumx < target10) and (ci < 255):
             sumx += bins[ci]
             sumxx += ci * bins[ci]
             ci += 1
 
         mode_bin = sumxx / sumx + 0.5
-        mode_val = bin1 + binsize * (mode_bin - 1.0)
+        mode_val = current_bin1 + current_binsize * (mode_bin - 1.0)
 
-        imax_floor = int(math.floor(mode_bin))
-        sumx = 0.0
-        for ci in range(imax_floor):
-            sumx += bins[ci]
-        sumx += bins[imax_floor] * (mode_bin - imax_floor)
-        sumx /= goodcnt
-        moden = sumx
+        lower_target = goodcnt_h * 0.25
+        upper_target = goodcnt_h * 0.75
 
-        lower = goodcnt * 0.25
-        upper = goodcnt * 0.75
-        sumx = 0.0
-        ci = 0
-        while sumx < lower:
-            sumx += bins[ci]
-            ci += 1
-        lower_val = ci - (sumx - lower) / bins[ci - 1]
-
-        while sumx < upper:
-            sumx += bins[ci]
-            ci += 1
-        upper_val = ci - (sumx - upper) / bins[ci - 1]
+        lower_val = bin_quartile_numpy(bins, lower_target)
+        upper_val = bin_quartile_numpy(bins, upper_target)
 
         if (lower_val < 1.0) or (upper_val > 255.0):
-            bin1 -= 128.0 * binsize
-            binsize *= 2.0
+            current_bin1 -= 128.0 * current_binsize
+            current_binsize *= 2.0
             tries += 1
-            repeat = 1
         elif (upper_val - lower_val) < 40.0:
-            binsize /= 3.0
-            bin1 = mode_val - 128.0 * binsize
+            current_binsize /= 3.0
+            current_bin1 = mode_val - 128.0 * current_binsize
             tries += 1
-            repeat = 1
         else:
-            repeat = 0
+            break
 
-    sum_val = ssum
+    fwhm_val = current_binsize * (upper_val - lower_val) / 1.35
 
-    fwhm_val = binsize * (upper_val - lower_val) / 1.35
+    median_target = goodcnt_h / 2.0
+    median_val = bin_quartile_numpy(bins, median_target)
+    lfwhm_val = current_binsize * (median_val - lower_val) * 2.0 / 1.35
+    median_val = current_bin1 + current_binsize * (median_val - 1.0)
 
-    sumx = 0.0
-    ci = 0
-    while sumx < goodcnt / 2.0:
-        sumx += bins[ci]
-        ci += 1
-    median_val = ci - (sumx - goodcnt / 2.0) / bins[ci - 1]
-
-    lfwhm_val = binsize * (median_val - lower_val) * 2.0 / 1.35
-
-    median_val = bin1 + binsize * (median_val - 1.0)
-
-    return {'sum': sum_val, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
+    return {'sum': ssum_val, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
             'sd': sd_val, 'fwhm': fwhm_val, 'lfwhm': lfwhm_val, 'return_code': 0}
 
 
