@@ -1743,24 +1743,20 @@ def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwK
 #     return kernelSol
 
 
-def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
-    xi = int(stamp['xss'][stamp['sscnt']])
-    yi = int(stamp['yss'][stamp['sscnt']])
-
+@numba.jit(nopython=True)
+def make_model_jit(vectors, kernelSol, csModel, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp,
+                   xi, yi):
     xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
     yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
 
     fwSq = fwKSStamp * fwKSStamp
-    csModel = np.zeros(fwSq, dtype=np.float32)
 
-    vector = stamp['vectors'][0]
     coeff = kernelSol[1]
     for i in range(fwSq):
-        csModel[i] += np.float32(coeff * vector[i])
+        csModel[i] = coeff * vectors[0, i]
 
     k = 2
     for i1 in range(1, nCompKer):
-        vector = stamp['vectors'][i1]
         coeff = 0.0
         ax = 1.0
         for ix in range(kerOrder + 1):
@@ -1772,9 +1768,54 @@ def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSSta
             ax *= xf
 
         for i in range(fwSq):
-            csModel[i] += np.float32(coeff * vector[i])
+            csModel[i] += coeff * vectors[i1, i]
 
-    return csModel
+
+def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
+    xi = int(stamp['xss'][stamp['sscnt']])
+    yi = int(stamp['yss'][stamp['sscnt']])
+
+    fwSq = fwKSStamp * fwKSStamp
+    csModel = np.zeros(fwSq, dtype=np.float64)
+    vectors = np.asarray(stamp['vectors'], dtype=np.float64)
+    kSol = np.asarray(kernelSol, dtype=np.float64)
+    make_model_jit(vectors, kSol, csModel, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp,
+                   xi, yi)
+    return csModel.astype(np.float32)
+
+# # 旧版本 make_model_numpy — 已替换为 jit 版本
+# def make_model_numpy(stamp, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp):
+#     xi = int(stamp['xss'][stamp['sscnt']])
+#     yi = int(stamp['yss'][stamp['sscnt']])
+# 
+#     xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+#     yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+# 
+#     fwSq = fwKSStamp * fwKSStamp
+#     csModel = np.zeros(fwSq, dtype=np.float32)
+# 
+#     vector = stamp['vectors'][0]
+#     coeff = kernelSol[1]
+#     for i in range(fwSq):
+#         csModel[i] += np.float32(coeff * vector[i])
+# 
+#     k = 2
+#     for i1 in range(1, nCompKer):
+#         vector = stamp['vectors'][i1]
+#         coeff = 0.0
+#         ax = 1.0
+#         for ix in range(kerOrder + 1):
+#             ay = 1.0
+#             for iy in range(kerOrder - ix + 1):
+#                 coeff += kernelSol[k] * ax * ay
+#                 k += 1
+#                 ay *= yf
+#             ax *= xf
+# 
+#         for i in range(fwSq):
+#             csModel[i] += np.float32(coeff * vector[i])
+# 
+#     return csModel
 
 
 def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
@@ -1835,42 +1876,77 @@ def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, d
     return 0
 
 
-def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
-                        rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder):
-    sscnt = stamp_dict['sscnt']
-    xRegion = int(stamp_dict['xss'][sscnt])
-    yRegion = int(stamp_dict['yss'][sscnt])
+@numba.jit(nopython=True)
+def get_stamp_sig_jit(vectors, kernelSol, imNoise, mRData1d, im,
+                       fwKSStamp, hwKSStamp, rPixX, rPixY,
+                       nCompKer, kerOrder, bgOrder, xi, yi,
+                       figMerit_is_v, statSig, temp):
+    LOCAL_ZEROVAL = 1e-10
+    LOCAL_MAXVAL = 1e10
+    LOCAL_FLAG_INPUT_ISBAD = 0x80
+    LOCAL_FLAG_ISNAN = 0x08
 
-    im = stamp_dict['krefArea']
-    bg = get_background_numpy(xRegion, yRegion, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
-    csModel = make_model_numpy(stamp_dict, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp)
+    ncompBG = (nCompKer - 1) * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+    background = 0.0
+    k = 1
+    xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+    yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+    ax = 1.0
+    for i in range(bgOrder + 1):
+        ay = 1.0
+        for j in range(bgOrder - i + 1):
+            background += kernelSol[ncompBG + k] * ax * ay
+            k += 1
+            ay *= yf
+        ax *= xf
+
+    fwSq = fwKSStamp * fwKSStamp
+    csModel = np.zeros(fwSq, dtype=np.float64)
+
+    coeff = kernelSol[1]
+    for i in range(fwSq):
+        csModel[i] = coeff * vectors[0, i]
+
+    kk = 2
+    for i1 in range(1, nCompKer):
+        coeff = 0.0
+        ax = 1.0
+        for ix in range(kerOrder + 1):
+            ay = 1.0
+            for iy in range(kerOrder - ix + 1):
+                coeff += kernelSol[kk] * ax * ay
+                kk += 1
+                ay *= yf
+            ax *= xf
+
+        for i in range(fwSq):
+            csModel[i] += coeff * vectors[i1, i]
 
     nsig = 0
     sig1 = 0.0
     sig2 = -1.0
     sig3 = -1.0
 
-    temp = np.zeros(fwKSStamp * fwKSStamp, dtype=np.float32)
-
     for j in range(fwKSStamp):
-        yRegion2 = yRegion - hwKSStamp + j
+        yRegion2 = yi - hwKSStamp + j
         for i in range(fwKSStamp):
-            xRegion2 = xRegion - hwKSStamp + i
+            xRegion2 = xi - hwKSStamp + i
             idx = i + j * fwKSStamp
 
-            tdat = float(csModel[idx])
-            idat = float(im[idx])
-            ndat = float(imNoise[xRegion2 + rPixX * yRegion2])
+            tdat = csModel[idx]
+            idat = im[idx]
+            ndat = imNoise[xRegion2 + rPixX * yRegion2]
 
-            diff = tdat - idat + bg
+            diff = tdat - idat + background
 
-            if (int(mRData[xRegion2 + rPixX * yRegion2]) & FLAG_INPUT_ISBAD) or (abs(idat) <= ZEROVAL):
+            mr_idx = xRegion2 + rPixX * yRegion2
+            if (mRData1d[mr_idx] & LOCAL_FLAG_INPUT_ISBAD) or (abs(idat) <= LOCAL_ZEROVAL):
                 continue
             else:
                 temp[idx] = diff
 
-            if (tdat * 0.0 != 0.0) or (idat * 0.0 != 0.0):
-                mRData[xRegion2 + rPixX * yRegion2] = int(mRData[xRegion2 + rPixX * yRegion2]) | (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+            if math.isnan(tdat) or math.isnan(idat):
+                mRData1d[mr_idx] = mRData1d[mr_idx] | (LOCAL_FLAG_INPUT_ISBAD | LOCAL_FLAG_ISNAN)
                 continue
 
             nsig += 1
@@ -1878,13 +1954,38 @@ def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
 
     if nsig > 0:
         sig1 /= nsig
-        if sig1 >= MAXVAL:
+        if sig1 >= LOCAL_MAXVAL:
             sig1 = -1.0
     else:
         sig1 = -1.0
 
+    return (sig1, sig2, sig3, nsig)
+
+
+def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
+                        rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder):
+    sscnt = stamp_dict['sscnt']
+    xRegion = int(stamp_dict['xss'][sscnt])
+    yRegion = int(stamp_dict['yss'][sscnt])
+
+    im = stamp_dict['krefArea']
+    vectors = np.asarray(stamp_dict['vectors'], dtype=np.float64)
+    kSol = np.asarray(kernelSol, dtype=np.float64)
+    imNoiseArr = np.asarray(imNoise, dtype=np.float64)
+    mRDataArr = np.asarray(mRData, dtype=np.int64)
+    imArr = np.asarray(im, dtype=np.float64)
+
+    figMerit_is_v = 1 if figMerit[0:1] == "v" else 0
+    temp = np.zeros(fwKSStamp * fwKSStamp, dtype=np.float64)
+
+    sig1, sig2, sig3, nsig = get_stamp_sig_jit(
+        vectors, kSol, imNoiseArr, mRDataArr, imArr,
+        fwKSStamp, hwKSStamp, rPixX, rPixY,
+        nCompKer, kerOrder, bgOrder, xRegion, yRegion,
+        figMerit_is_v, statSig, temp)
+
     if figMerit[0:1] != "v":
-        temp_2d = temp.reshape(fwKSStamp, fwKSStamp)
+        temp_2d = temp.reshape(fwKSStamp, fwKSStamp).astype(np.float32)
         mRData_2d = mRData.reshape(-1, rPixX)
         result = get_stamp_stats3_numpy(temp_2d, xRegion - hwKSStamp, yRegion - hwKSStamp,
                                         fwKSStamp, fwKSStamp,
@@ -1901,6 +2002,74 @@ def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
                 sig3 = -1.0
 
     return (sig1, sig2, sig3)
+
+# # 旧版本 get_stamp_sig_numpy — 已替换为 jit 版本
+# def get_stamp_sig_numpy(stamp_dict, kernelSol, imNoise, fwKSStamp, hwKSStamp,
+#                         rPixX, rPixY, mRData, figMerit, statSig, nCompKer, kerOrder, bgOrder):
+#     sscnt = stamp_dict['sscnt']
+#     xRegion = int(stamp_dict['xss'][sscnt])
+#     yRegion = int(stamp_dict['yss'][sscnt])
+# 
+#     im = stamp_dict['krefArea']
+#     bg = get_background_numpy(xRegion, yRegion, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY)
+#     csModel = make_model_numpy(stamp_dict, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSStamp)
+# 
+#     nsig = 0
+#     sig1 = 0.0
+#     sig2 = -1.0
+#     sig3 = -1.0
+# 
+#     temp = np.zeros(fwKSStamp * fwKSStamp, dtype=np.float32)
+# 
+#     for j in range(fwKSStamp):
+#         yRegion2 = yRegion - hwKSStamp + j
+#         for i in range(fwKSStamp):
+#             xRegion2 = xRegion - hwKSStamp + i
+#             idx = i + j * fwKSStamp
+# 
+#             tdat = float(csModel[idx])
+#             idat = float(im[idx])
+#             ndat = float(imNoise[xRegion2 + rPixX * yRegion2])
+# 
+#             diff = tdat - idat + bg
+# 
+#             if (int(mRData[xRegion2 + rPixX * yRegion2]) & FLAG_INPUT_ISBAD) or (abs(idat) <= ZEROVAL):
+#                 continue
+#             else:
+#                 temp[idx] = diff
+# 
+#             if (tdat * 0.0 != 0.0) or (idat * 0.0 != 0.0):
+#                 mRData[xRegion2 + rPixX * yRegion2] = int(mRData[xRegion2 + rPixX * yRegion2]) | (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+#                 continue
+# 
+#             nsig += 1
+#             sig1 += diff * diff / ndat
+# 
+#     if nsig > 0:
+#         sig1 /= nsig
+#         if sig1 >= MAXVAL:
+#             sig1 = -1.0
+#     else:
+#         sig1 = -1.0
+# 
+#     if figMerit[0:1] != "v":
+#         temp_2d = temp.reshape(fwKSStamp, fwKSStamp)
+#         mRData_2d = mRData.reshape(-1, rPixX)
+#         result = get_stamp_stats3_numpy(temp_2d, xRegion - hwKSStamp, yRegion - hwKSStamp,
+#                                         fwKSStamp, fwKSStamp,
+#                                         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
+#         if result['return_code'] != 0:
+#             sig2 = -1.0
+#             sig3 = -1.0
+#         else:
+#             sig2 = result['sd']
+#             sig3 = result['fwhm']
+#             if sig2 < 0 or sig2 >= MAXVAL:
+#                 sig2 = -1.0
+#             elif sig3 < 0 or sig3 >= MAXVAL:
+#                 sig3 = -1.0
+# 
+#     return (sig1, sig2, sig3)
 
 
 def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
