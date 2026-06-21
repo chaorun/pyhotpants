@@ -881,12 +881,23 @@ def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, s
     # return 0
 
     # ===== new: delegate to fill_stamp_numba =====
-    return fill_stamp_numba(saVectors, saMat, saScprod, saKrefArea, saSumVal, saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
-                           hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
-                           usePCA, filter_x, filter_y, PCA, fillVal, mRData,
-                           img_flat=img_flat, imRef_flat=imRef_flat, kernels_all=kernels_all)
+    result = fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+                              hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+                              usePCA, filter_x, filter_y, PCA, fillVal, mRData,
+                              img_flat=img_flat, imRef_flat=imRef_flat, kernels_all=kernels_all)
+    if isinstance(result, int):
+        return result
+    nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    fwSqStamp = fwKSStamp * fwKSStamp
+    nC = nCompKer + 1
+    saVectors[si, :nCompKer + nbg, :fwSqStamp] = result['vectors']
+    saKrefArea[si, :] = result['krefArea']
+    saMat[si, :nC + 1, :nC + 1] = result['mat']
+    saScprod[si, :nC + 1] = result['scprod']
+    saSumVal[si] = result['sum_val']
+    return 0
 
-def fill_stamp_numba(saVectors, saMat, saScprod, saKrefArea, saSumVal, saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
                      usePCA, filter_x, filter_y, PCA, fillVal, mRData,
                      img_flat=None, imRef_flat=None, kernels_all=None):
@@ -956,19 +967,9 @@ def fill_stamp_numba(saVectors, saMat, saScprod, saKrefArea, saSumVal, saXss, sa
         nvec, rflags, fillVal, mRData1d, verbose,
         out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val)
 
-    # for n in range(nvec + nbg):
-    #     sa.vectors[si, n, :fwSqStamp] = out_vectors[n]
-    saVectors[si, :nvec + nbg, :fwSqStamp] = out_vectors
-    # sa.krefArea[si, :] = out_krefArea
-    saKrefArea[si, :] = out_krefArea
-    # sa.mat[si, :nC, :nC] = out_mat
-    saMat[si, :nC + 1, :nC + 1] = out_mat
-    # sa.scprod[si, :nC] = out_scprod
-    saScprod[si, :nC + 1] = out_scprod
-    # sa.sum_val[si] = out_sum_val[0]
-    saSumVal[si] = out_sum_val[0]
-
-    return 0
+    return dict(vectors=out_vectors, krefArea=out_krefArea,
+                mat=out_mat, scprod=out_scprod,
+                sum_val=out_sum_val[0])
 
 @numba.jit(nopython=True)
 def get_stamp_sig_batch_jit(
