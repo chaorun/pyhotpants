@@ -4837,13 +4837,6 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     nC         = sa['nC']
     nKSStamps  = sa['nKSStamps']
 
-    def do_fill(indices):
-        for idx in indices:
-            fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
-                             ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                             bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
-                             PCA, fillVal, mRData)
-
     # import time
     iter_count = 0
     # t_start = time.time()
@@ -4900,7 +4893,11 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     meansigSubstamps = ca_result['meansigSubstamps']
     scatterSubstamps = ca_result['scatterSubstamps']
     nskippedSubstamps = ca_result['nskippedSubstamps']
-    do_fill(ca_result['refill_indices'])
+    for idx in ca_result['refill_indices']:
+        fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
+                         ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                         bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                         PCA, fillVal, mRData)
     logger.debug("  fitKernel: check_again done, check=%s", check)
     # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 
@@ -4961,7 +4958,11 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         meansigSubstamps = ca_result['meansigSubstamps']
         scatterSubstamps = ca_result['scatterSubstamps']
         nskippedSubstamps = ca_result['nskippedSubstamps']
-        do_fill(ca_result['refill_indices'])
+        for idx in ca_result['refill_indices']:
+            fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
+                             ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                             bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                             PCA, fillVal, mRData)
         logger.debug("  fitKernel: check_again done, check=%s", check)
         # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 

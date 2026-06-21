@@ -2220,14 +2220,6 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
                 fx_idx = fwKernel - 1 - ic
                 kernels_shared[n, jc * fwKernel + ic] = fy[n * fwKernel + fy_idx] * fx[n * fwKernel + fx_idx]
 
-    def do_fill(indices):
-        for idx in indices:
-            fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
-                             ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                             bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
-                             PCA, fillVal, mRData,
-                             img_flat=img_flat_shared, imRef_flat=imRef_flat_shared,
-                             kernels_all=kernels_shared)
 
     # import time
     iter_count = 0
@@ -2303,7 +2295,13 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     meansigSubstamps = ca_result['meansigSubstamps']
     scatterSubstamps = ca_result['scatterSubstamps']
     nskippedSubstamps = ca_result['nskippedSubstamps']
-    do_fill(ca_result['refill_indices'])
+    for idx in ca_result['refill_indices']:
+        fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
+                         ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                         bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                         PCA, fillVal, mRData,
+                         img_flat=img_flat_shared, imRef_flat=imRef_flat_shared,
+                         kernels_all=kernels_shared)
     logger.debug("  fitKernel: check_again done, check=%s", check)
     # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 
@@ -2363,7 +2361,13 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         meansigSubstamps = ca_result['meansigSubstamps']
         scatterSubstamps = ca_result['scatterSubstamps']
         nskippedSubstamps = ca_result['nskippedSubstamps']
-        do_fill(ca_result['refill_indices'])
+        for idx in ca_result['refill_indices']:
+            fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
+                             ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
+                             bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
+                             PCA, fillVal, mRData,
+                             img_flat=img_flat_shared, imRef_flat=imRef_flat_shared,
+                             kernels_all=kernels_shared)
         logger.debug("  fitKernel: check_again done, check=%s", check)
         # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 
