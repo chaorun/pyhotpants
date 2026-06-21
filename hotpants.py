@@ -3700,7 +3700,7 @@ def get_stamp_sig_numpy(sa, si, kernelSol, imNoise, fwKSStamp, hwKSStamp,
 def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
                                 hwKernel, fwKernel, kernel, kernel_coeffs,
                                 convolveVariance, kerFracMask, mRData,
-                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec, logger=None):
     from scipy.signal import fftconvolve
     from scipy.ndimage import maximum_filter
     import sys
@@ -3724,7 +3724,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         conv_maps.append(fftconvolve(image_2d, basis, mode='same'))
 
     t1 = time.time()
-    sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
+    if logger:
+        logger.debug("  FFT convolve (%d basis): %.2f s", nCompKer, t1 - t0)
 
     halfX = 0.5 * rPixX
     halfY = 0.5 * rPixY
@@ -3760,7 +3761,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         output += cf * conv_maps[i1]
 
     t2 = time.time()
-    sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
+    if logger:
+        logger.debug("  Poly weighting: %.2f s", t2 - t1)
 
     sy = slice(hwKernel, ySize - hwKernel)
     sx = slice(hwKernel, xSize - hwKernel)
@@ -3793,7 +3795,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         vData2d[sy, sx] = varOutput[sy, sx]
 
     t3 = time.time()
-    sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
+    if logger:
+        logger.debug("  Variance: %.2f s", t3 - t2)
 
     cMaskView = np.asarray(cMask).reshape(ySize, xSize)
     mRDataView = np.asarray(mRData).reshape(ySize, xSize)
@@ -3809,7 +3812,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
     maskPixX += hwKernel
     nMaskPix = len(maskPixY)
 
-    sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
+    if logger:
+        logger.debug("  Mask pixels to check: %d", nMaskPix)
 
     for pidx in range(nMaskPix):
         j = int(maskPixY[pidx])
@@ -3840,8 +3844,10 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
             mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
 
     t4 = time.time()
-    sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
-    sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
+    if logger:
+        logger.debug("  Mask handling: %.2f s", t4 - t3)
+    if logger:
+        logger.debug("  Total spatial_convolve_fast: %.2f s", t4 - t0)
 
     return vData
 
@@ -5252,7 +5258,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
         for l in range(nStampY):
             for k in range(nStampX):
-                sys.stderr.write("Build stamp  : t %4d i %4d (grid coord %2d %2d)\n" % (ntS, niS, k, l))
+                logger.info("Build stamp  : t %4d i %4d (grid coord %2d %2d)", ntS, niS, k, l)
 
                 sXMin = rXBMin + k * rPixX // nStampX
                 sYMin = rYBMin + l * rPixY // nStampY
@@ -5276,7 +5282,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
                 if xcmp is not None and Ncmp > 0:
                     if verbose >= 2:
-                        sys.stderr.write("Adding centers manually\n")
+                        logger.info("Adding centers manually")
                     for m in range(Ncmp):
                         if (xcmp[m] > sXMin + hwKernel + 1) and (xcmp[m] < sXMax - hwKernel - 1) and \
                            (ycmp[m] > sYMin + hwKernel + 1) and (ycmp[m] < sYMax - hwKernel - 1):
@@ -5385,7 +5391,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                             # sys.stderr.write('\n')
                     if findSSC:
                         if verbose >= 2:
-                            sys.stderr.write("Automatically finding additional centers\n")
+                            logger.debug("Automatically finding additional centers")
                         # ctCopy = ctSa.deepCopy() if ctSa is not None else None
                         # ciCopy = ciSa.deepCopy() if ciSa is not None else None
                         # iDataCopy = iRData1d.copy()
@@ -5654,14 +5660,14 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 if localForceConvolve != "i":
                     if verbose >= 2:
                         # sys.stderr.write("    templ: %d substamps\n" % ctStamps[ntS]['nss'])
-                        sys.stderr.write("    templ: %d substamps\n" % ctSa['nss'][ntS])
+                        logger.info("    templ: %d substamps", ctSa['nss'][ntS])
                     # if ctStamps[ntS]['nss'] > 0:
                     if ctSa['nss'][ntS] > 0:
                         ntS += 1
                 if localForceConvolve != "t":
                     if verbose >= 2:
                         # sys.stderr.write("    image: %d substamps\n" % ciStamps[niS]['nss'])
-                        sys.stderr.write("    image: %d substamps\n" % ciSa['nss'][niS])
+                        logger.info("    image: %d substamps", ciSa['nss'][niS])
                     # if ciStamps[niS]['nss'] > 0:
                     if ciSa['nss'][niS] > 0:
                         niS += 1
@@ -5670,23 +5676,23 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
         tSFrac = ntS / float(nStamps)
 
         if localForceConvolve == "i":
-            sys.stderr.write("%d stamps built (%.2f%%)\n\n" % (niS, iSFrac))
+            logger.info("%d stamps built (%.2f%%)", niS, iSFrac)
             if iSFrac < minFracGoodStamps:
                 flag = 1
         elif localForceConvolve == "t":
-            sys.stderr.write("%d stamps built (%.2f%%)\n\n" % (ntS, tSFrac))
+            logger.info("%d stamps built (%.2f%%)", ntS, tSFrac)
             if tSFrac < minFracGoodStamps:
                 flag = 1
         elif (iSFrac < minFracGoodStamps) or (tSFrac < minFracGoodStamps):
-            sys.stderr.write("%d and %d stamps built (%.2f%%, %.2f%%)\n\n" % (ntS, niS, tSFrac, iSFrac))
+            logger.info("%d and %d stamps built (%.2f%%, %.2f%%)", ntS, niS, tSFrac, iSFrac)
             flag = 1
         else:
-            sys.stderr.write("%d and %d stamps built (%.2f%%, %.2f%%)\n\n" % (ntS, niS, tSFrac, iSFrac))
+            logger.info("%d and %d stamps built (%.2f%%, %.2f%%)", ntS, niS, tSFrac, iSFrac)
             break
 
         if flag and (status <= 1) and (scaleFitThresh < 1.0):
             kerFitThresh *= scaleFitThresh
-            sys.stderr.write("Too few stamps were fit, scaling down fitting threshold to %.2f\n" % kerFitThresh)
+            logger.info("Too few stamps were fit, scaling down fitting threshold to %.2f", kerFitThresh)
 
             if localForceConvolve != "i":
                 # ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
@@ -5925,7 +5931,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     iMerit = 0.0
     convTmpl = 0
 
-    sys.stderr.write("Filling Template sub-stamps\n")
+    logger.info("Filling Template sub-stamps")
     if localForceConvolve != "i":
         for k in range(ntS):
             # ctStamps[k]['sscnt'] = 0
@@ -5941,7 +5947,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
                              bgOrder, nCompKer, kerOrder, usePCA,
                              filter_x, filter_y, PCA, fillVal, mRData1d)
         if localForceConvolve == "b":
-            sys.stderr.write("\n\nTrying to convolve the TEMPLATE to fit IMAGE\n")
+            logger.info("Trying to convolve the TEMPLATE to fit IMAGE")
             # tMerit = check_stamps_numpy(
             #     ctStamps, ntS, iRData1d, oRData1d,
             #     nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
@@ -5961,12 +5967,12 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
                 localForceConvolve, figMerit, kerSigReject, statSig,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
                 kernel_vec, mRData1d, nKSStamps=ctNKSStamps, nC=ctNC)
-            sys.stderr.write("    Result : merit = %.3f\n" % tMerit)
+            logger.info("    Result : merit = %.3f", tMerit)
         else:
             tMerit = 0.0
             iMerit = 0.0
 
-    sys.stderr.write("Filling Image sub-stamps\n")
+    logger.info("Filling Image sub-stamps")
     if localForceConvolve != "t":
         for k in range(niS):
             # ciStamps[k]['sscnt'] = 0
@@ -5982,7 +5988,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
                              bgOrder, nCompKer, kerOrder, usePCA,
                              filter_x, filter_y, PCA, fillVal, mRData1d)
         if localForceConvolve == "b":
-            sys.stderr.write("\n\nTrying to convolve the IMAGE to fit TEMPLATE \n")
+            logger.info("Trying to convolve the IMAGE to fit TEMPLATE")
             # iMerit = check_stamps_numpy(
             #     ciStamps, niS, tRData1d, oRData1d,
             #     nCompKer, kerOrder, bgOrder, nCompTotal, verbose,
@@ -6002,7 +6008,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
                 localForceConvolve, figMerit, kerSigReject, statSig,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
                 kernel_vec, mRData1d, nKSStamps=ciNKSStamps, nC=ciNC)
-            sys.stderr.write("    Result : merit = %.3f\n" % iMerit)
+            logger.info("    Result : merit = %.3f", iMerit)
         else:
             iMerit = 0.0
             tMerit = 0.0
@@ -6134,7 +6140,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
     nS = 0
 
     if convTmpl:
-        sys.stderr.write("\n\n Region %d:%d,%d:%d : Convolving TEMPLATE\n" % (rXMin, rXMax, rYMin, rYMax))
+        logger.info("Region %d:%d,%d:%d : Convolving TEMPLATE", rXMin, rXMax, rYMin, rYMax)
         nS = ntS
 
         logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
@@ -6185,7 +6191,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: noise rebuild done", region_idx)
         logger.debug("[region %d] convolve_diff: spatial_convolve start", region_idx)
-        sys.stderr.write("\n Convolving...\n")
+        logger.info("Convolving...")  # Template
         # vData = spatial_convolve_numpy(
         #     tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
         #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
@@ -6254,13 +6260,13 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
         sumKernel = make_kernel_numpy(rXMin, rYMin, tKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMin, rYMin, sumKernel))
+        logger.info(" Sum Kernel at %d,%d: %f", rXMin, rYMin, sumKernel)
         sumKernel = make_kernel_numpy(rXMax, rYMax, tKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMax, rYMax, sumKernel))
+        logger.info(" Sum Kernel at %d,%d: %f", rXMax, rYMax, sumKernel)
         sumKernel = make_kernel_numpy(rPixX // 2, rPixY // 2, tKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        sys.stderr.write(" Using Kernel Sum = %f\n\n" % sumKernel)
+        logger.info(" Using Kernel Sum = %f", sumKernel)
 
         logger.debug("[region %d] convolve_diff: make_kernel done", region_idx)
         logger.debug("[region %d] convolve_diff: noise_combine start", region_idx)
@@ -6315,7 +6321,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
             ciSa = None
 
     else:
-        sys.stderr.write("\n\n Region %d,%d %d,%d : Convolving IMAGE\n" % (rXMin, rXMax, rYMin, rYMax))
+        logger.info("Region %d:%d %d,%d : Convolving IMAGE", rXMin, rXMax, rYMin, rYMax)
         nS = niS
 
         logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
@@ -6366,7 +6372,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: noise rebuild done", region_idx)
         logger.debug("[region %d] convolve_diff: spatial_convolve start", region_idx)
-        sys.stderr.write("\n Convolving...\n")
+        logger.info("Convolving...")  # Image
         # vData = spatial_convolve_numpy(
         #     iRData1d, eRData1d, rPixX, rPixY, iKerSol, oRData1d, misRData1d,
         #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
@@ -6404,13 +6410,13 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
         sumKernel = make_kernel_numpy(rXMin, rYMin, iKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMin, rYMin, sumKernel))
+        logger.info(" Sum Kernel at %d,%d: %f", rXMin, rYMin, sumKernel)
         sumKernel = make_kernel_numpy(rXMax, rYMax, iKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        sys.stderr.write(" Sum Kernel at %d,%d: %f\n" % (rXMax, rYMax, sumKernel))
+        logger.info(" Sum Kernel at %d,%d: %f", rXMax, rYMax, sumKernel)
         sumKernel = make_kernel_numpy(rPixX // 2, rPixY // 2, iKerSol, rPixX, rPixY,
                                       nCompKer, kerOrder, fwKernel, kernel_vec, kernel_coeffs, kernel)
-        sys.stderr.write(" Using Kernel Sum = %f\n\n" % sumKernel)
+        logger.info(" Using Kernel Sum = %f", sumKernel)
 
         logger.debug("[region %d] convolve_diff: make_kernel done", region_idx)
         logger.debug("[region %d] convolve_diff: noise_combine start", region_idx)
@@ -6607,7 +6613,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
 
     # tm1 = time.time(); logger.debug("[out] pre-output setup done, %.3fs", tm1 - start_time)
 
-    sys.stderr.write(" Creating and writing output images...\n")
+    logger.info(" Creating and writing output images...")
 
     inv1 = 1.0 / sumKernel
 
@@ -6670,7 +6676,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
-            sys.stderr.write("   FINAL Mean sig: %6.3f stdev: %6.3f\n" % (meansigSubstampsF, scatterSubstampsF))
+            logger.info("   FINAL Mean sig: %6.3f stdev: %6.3f", meansigSubstampsF, scatterSubstampsF)
 
     else:
         oRData2d = oRData1d.reshape(rPixY, rPixX)
@@ -6708,7 +6714,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
             mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
-            sys.stderr.write("    FINAL Mean sig: %6.3f stdev: %6.3f\n" % (meansigSubstampsF, scatterSubstampsF))
+            logger.info("    FINAL Mean sig: %6.3f stdev: %6.3f", meansigSubstampsF, scatterSubstampsF)
 
     oRData_2d = oRData1d.reshape(rPixY, rPixX)
     noiseData_2d = noiseData1d.reshape(rPixY, rPixX)
@@ -6716,18 +6722,18 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
 
     # tm4 = time.time(); logger.debug("[out] get_stamp_stats3 start")
 
-    sys.stderr.write(" Getting diffim stats for GOOD pixels : \n")
+    logger.info(" Getting diffim stats for GOOD pixels : ")
     res_good = get_stamp_stats3_numpy(
         oRData_2d, 0, 0, rPixX, rPixY,
         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
     mean_val = res_good[1]
     sd_val = res_good[4]
-    sys.stderr.write("   Mean   : %.2f\n" % res_good[1])
-    sys.stderr.write("   Median : %.2f\n" % res_good[2])
-    sys.stderr.write("   Mode   : %.2f\n" % res_good[3])
-    sys.stderr.write("   Stdev  : %.2f\n" % res_good[4])
+    logger.info("   Mean   : %.2f", res_good[1])
+    logger.info("   Median : %.2f", res_good[2])
+    logger.info("   Mode   : %.2f", res_good[3])
+    logger.info("   Stdev  : %.2f", res_good[4])
 
-    sys.stderr.write(" Getting noiseim stats for GOOD pixels : \n")
+    logger.info(" Getting noiseim stats for GOOD pixels : ")
     nres_good = get_stamp_stats3_numpy(
         noiseData_2d, 0, 0, rPixX, rPixY,
         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
@@ -6736,37 +6742,37 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     x2norm, nx2norm = get_noise_stats3_numpy(
         oRData1d, noiseData1d, 0x0, 0xffff, rPixX, rPixY, mRData1d)
 
-    sys.stderr.write("   Mean   : %.2f\n" % nres_good[1])
-    sys.stderr.write("   Median : %.2f\n" % nres_good[2])
-    sys.stderr.write("   Mode   : %.2f\n" % nres_good[3])
-    sys.stderr.write("   Stdev  : %.2f\n" % nres_good[4])
-    sys.stderr.write(" Emperical / Expected Noise for GOOD pixels = %.2f\n" % (sd_val / nmean_val if nmean_val != 0 else 0.0))
-    sys.stderr.write(" X2NORM = %.2f\n\n" % x2norm)
+    logger.info("   Mean   : %.2f", nres_good[1])
+    logger.info("   Median : %.2f", nres_good[2])
+    logger.info("   Mode   : %.2f", nres_good[3])
+    logger.info("   Stdev  : %.2f", nres_good[4])
+    logger.info(" Emperical / Expected Noise for GOOD pixels = %.2f", sd_val / nmean_val if nmean_val != 0 else 0.0)
+    logger.info(" X2NORM = %.2f", x2norm)
 
     diffrat = sd_val / nmean_val if nmean_val != 0 else 0.0
 
-    sys.stderr.write(" Getting diffim stats for OK pixels : \n")
+    logger.info(" Getting diffim stats for OK pixels : ")
     res_ok = get_stamp_stats3_numpy(
         oRData_2d, 0, 0, rPixX, rPixY,
         0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
     meanm_val = res_ok[1]
     sdm_val = res_ok[4]
-    sys.stderr.write("   Mean   : %.2f\n" % res_ok[1])
-    sys.stderr.write("   Median : %.2f\n" % res_ok[2])
-    sys.stderr.write("   Mode   : %.2f\n" % res_ok[3])
-    sys.stderr.write("   Stdev  : %.2f\n" % res_ok[4])
+    logger.info("   Mean   : %.2f", res_ok[1])
+    logger.info("   Median : %.2f", res_ok[2])
+    logger.info("   Mode   : %.2f", res_ok[3])
+    logger.info("   Stdev  : %.2f", res_ok[4])
 
-    sys.stderr.write(" Getting noiseim stats for OK pixels : \n")
+    logger.info(" Getting noiseim stats for OK pixels : ")
     nres_ok = get_stamp_stats3_numpy(
         noiseData_2d, 0, 0, rPixX, rPixY,
         0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
     nmeanm_val = nres_ok[1]
-    sys.stderr.write("   Mean   : %.2f\n" % nres_ok[1])
-    sys.stderr.write("   Median : %.2f\n" % nres_ok[2])
-    sys.stderr.write("   Mode   : %.2f\n" % nres_ok[3])
-    sys.stderr.write("   Stdev  : %.2f\n" % nres_ok[4])
+    logger.info("   Mean   : %.2f", nres_ok[1])
+    logger.info("   Median : %.2f", nres_ok[2])
+    logger.info("   Mode   : %.2f", nres_ok[3])
+    logger.info("   Stdev  : %.2f", nres_ok[4])
 
-    sys.stderr.write(" Emperical / Expected Noise for OK pixels = %.2f\n\n" % (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0))
+    logger.info(" Emperical / Expected Noise for OK pixels = %.2f", sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0)
 
     # tm5 = time.time(); logger.debug("[out] get_stamp_stats3 done, %.3fs", tm5 - tm4)
 
@@ -6774,11 +6780,11 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         if diffrat != 0:
             diffrat = (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0) / diffrat
         if diffrat > 1:
-            sys.stderr.write(" Scale OK pixel noise by = %.2f\n" % diffrat)
+            logger.info(" Scale OK pixel noise by = %.2f", diffrat)
             ok_mask = (mRData1d & 0xff).astype(np.bool_) & ~((mRData1d & FLAG_OUTPUT_ISBAD).astype(np.bool_))
             noiseData1d[ok_mask] *= diffrat
         else:
-            sys.stderr.write(" Leave OK pixel noise as-is\n")
+            logger.info(" Leave OK pixel noise as-is")
 
     if kfSpreadMask2 >= 0:
         oRData2d = oRData1d.reshape(rPixY, rPixX)
@@ -6833,7 +6839,7 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     if stats_list is not None and region_idx < len(stats_list):
         stats_list[region_idx] = stats
 
-    sys.stderr.write("Region %i finished\n\n" % region_idx)
+    logger.info("Region %i finished", region_idx)
 
     logger.debug("[region %d] region_output_numpy done", region_idx)
     return stats
@@ -7061,22 +7067,22 @@ def hotpants(
             tg, tr, ig, ir,
             tu, tl, iu, il,
             mins, logger=logger)
-        sys.stderr.write(f"  [{ri}] setup: {tm.time()-t0:.3f}s\n"); sys.stderr.flush()
+        logger.info("[%d] setup: %.3fs", ri, tm.time()-t0)
 
         t1 = tm.time()
         bs_result = region_buildstamps_numpy(py, ctx_info, params_info, localFC_py, logger=logger)
-        sys.stderr.write(f"  [{ri}] buildstamps: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        logger.info("[%d] buildstamps: %.3fs", ri, tm.time()-t1)
         if bs_result['status'] != 0:
             continue
 
         t1 = tm.time()
         fit_result = region_fit_numpy(bs_result, py, ctx_info, params_info, localFC_py, logger=logger)
-        sys.stderr.write(f"  [{ri}] fit: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        logger.info("[%d] fit: %.3fs", ri, tm.time()-t1)
 
         t1 = tm.time()
         conv_result = region_convolve_diff_numpy(
             fit_result, py, bs_result, ctx_info, params_info, ri, localFC_py, logger=logger)
-        sys.stderr.write(f"  [{ri}] convolve_diff: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        logger.info("[%d] convolve_diff: %.3fs", ri, tm.time()-t1)
         localFC_py = conv_result.get('localForceConvolve', localFC_py)
 
         t1 = tm.time()
@@ -7084,7 +7090,7 @@ def hotpants(
             conv_result, py, fit_result,
             diff_out, noise_out, conv_out, mask_out,
             ctx_info, params_info, ri, None, logger=logger)
-        sys.stderr.write(f"  [{ri}] output: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        logger.info("[%d] output: %.3fs", ri, tm.time()-t1)
         stats_list_py[ri] = stats_entry
 
     if dump_dir is not None:

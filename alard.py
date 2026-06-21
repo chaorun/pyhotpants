@@ -1211,7 +1211,7 @@ def get_stamp_sig_numpy(sa, si, kernelSol, imNoise, fwKSStamp, hwKSStamp,
 def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata, cMask, kcStep,
                                 hwKernel, fwKernel, kernel, kernel_coeffs,
                                 convolveVariance, kerFracMask, mRData,
-                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec, logger=None):
     from scipy.signal import fftconvolve
     from scipy.ndimage import maximum_filter
     import sys
@@ -1235,7 +1235,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         conv_maps.append(fftconvolve(image_2d, basis, mode='same'))
 
     t1 = time.time()
-    sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
+    if logger:
+        logger.debug("  FFT convolve (%d basis): %.2f s", nCompKer, t1 - t0)
 
     halfX = 0.5 * rPixX
     halfY = 0.5 * rPixY
@@ -1271,7 +1272,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         output += cf * conv_maps[i1]
 
     t2 = time.time()
-    sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
+    if logger:
+        logger.debug("  Poly weighting: %.2f s", t2 - t1)
 
     sy = slice(hwKernel, ySize - hwKernel)
     sx = slice(hwKernel, xSize - hwKernel)
@@ -1304,7 +1306,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         vData2d[sy, sx] = varOutput[sy, sx]
 
     t3 = time.time()
-    sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
+    if logger:
+        logger.debug("  Variance: %.2f s", t3 - t2)
 
     cMaskView = np.asarray(cMask).reshape(ySize, xSize)
     mRDataView = np.asarray(mRData).reshape(ySize, xSize)
@@ -1320,7 +1323,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
     maskPixX += hwKernel
     nMaskPix = len(maskPixY)
 
-    sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
+    if logger:
+        logger.debug("  Mask pixels to check: %d", nMaskPix)
 
     for pidx in range(nMaskPix):
         j = int(maskPixY[pidx])
@@ -1351,8 +1355,10 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
             mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
 
     t4 = time.time()
-    sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
-    sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
+    if logger:
+        logger.debug("  Mask handling: %.2f s", t4 - t3)
+    if logger:
+        logger.debug("  Total spatial_convolve_fast: %.2f s", t4 - t0)
 
     return vData
 
