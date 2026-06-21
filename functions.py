@@ -489,7 +489,7 @@ def check_psf_center_numba(iData, imax, jmax, xLen, yLen, sx0, sy0,
                              hiThresh, sky, invdsky,
                              xbuffer, ybuffer, bbit, bbit1,
                              rPixX, hwKSStamp, mRData, kerFitThresh):
-    kerFitThresh = np.float64(np.float32(kerFitThresh))
+    kerFitThresh = np.float64(kerFitThresh)
     brk = 0
     dmax2 = 0.0
     for l in range(jmax - hwKSStamp, jmax + hwKSStamp + 1):

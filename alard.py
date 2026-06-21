@@ -340,8 +340,8 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                      nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY,
                      ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp,
                      wxy_pre=None):
-    rPixX2 = np.float64(np.float32(0.5 * rPixX))
-    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+    rPixX2 = np.float64(0.5 * rPixX)
+    rPixY2 = np.float64(0.5 * rPixY)
 
     for istamp in range(nS):
         if valid_mask[istamp] == 0:
@@ -352,8 +352,8 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
         else:
             xstamp = all_x[istamp]
             ystamp = all_y[istamp]
-            fx = np.float64(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
-            fy = np.float64(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
+            fx = np.float64((np.float64(xstamp) - rPixX2) / rPixX2)
+            fy = np.float64((np.float64(ystamp) - rPixY2) / rPixY2)
 
             kk = 0
             a1 = 1.0
@@ -703,8 +703,8 @@ def fill_stamp_numba_kernel(
     out_sum_val[0] = sumVal
 
     # ========== Step 3: background vectors ==========
-    rPixX2 = np.float64(np.float32(0.5 * rPixX))
-    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+    rPixX2 = np.float64(0.5 * rPixX)
+    rPixY2 = np.float64(0.5 * rPixY)
     for y_offset in range(fwKSStamp):
         j = yi - hwKSStamp + y_offset
         yf = (j - rPixY2) / rPixY2
@@ -2215,15 +2215,15 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
 
     # pre-compute wxy once for all stamps (depends only on stamp positions)
     wxy = np.zeros((nS, ncomp2), dtype=np.float64)
-    rPixX2 = np.float64(np.float32(0.5 * rPixX))
-    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+    rPixX2 = np.float64(0.5 * rPixX)
+    rPixY2 = np.float64(0.5 * rPixY)
     for istamp in range(nS):
         if saSscnt[istamp] >= saNss[istamp]:
             continue
         xstamp = int(saXss[istamp, saSscnt[istamp]])
         ystamp = int(saYss[istamp, saSscnt[istamp]])
-        fx = np.float64(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
-        fy = np.float64(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
+        fx = np.float64((np.float64(xstamp) - rPixX2) / rPixX2)
+        fy = np.float64((np.float64(ystamp) - rPixY2) / rPixY2)
         kk = 0
         a1 = 1.0
         for ideg1 in range(kerOrder + 1):
