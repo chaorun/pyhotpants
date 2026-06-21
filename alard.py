@@ -966,7 +966,7 @@ def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef
 
     return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[0]
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, parallel=True)
 def get_stamp_sig_batch_jit(
     sa_vectors, sa_krefArea, sa_sscnt, sa_nss, sa_xss, sa_yss,
     kernelSol, imNoise, mRData1d,
@@ -2017,7 +2017,7 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
         halfX, halfY = 0.5 * rPixX, 0.5 * rPixY
         xf_batch = np.zeros(nS, dtype=np.float64)
         yf_batch = np.zeros(nS, dtype=np.float64)
-        for si in range(nS):
+        for si in numba.prange(nS):
             if sscnt_local[si] < saNss[si]:
                 xi = float(saXss[si, sscnt_local[si]])
                 yi = float(saYss[si, sscnt_local[si]])
