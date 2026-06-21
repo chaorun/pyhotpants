@@ -1227,7 +1227,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         conv_maps.append(fftconvolve(image_2d, basis, mode='same'))
 
     t1 = time.time()
-    sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
+    # sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
+    logger.debug("  FFT convolve (%d basis): %.2f s", nCompKer, t1 - t0)
 
     halfX = 0.5 * rPixX
     halfY = 0.5 * rPixY
@@ -1263,7 +1264,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         output += cf * conv_maps[i1]
 
     t2 = time.time()
-    sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
+    # sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
+    logger.debug("  Poly weighting: %.2f s", t2 - t1)
 
     sy = slice(hwKernel, ySize - hwKernel)
     sx = slice(hwKernel, xSize - hwKernel)
@@ -1296,7 +1298,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         vData2d[sy, sx] = varOutput[sy, sx]
 
     t3 = time.time()
-    sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
+    # sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
+    logger.debug("  Variance: %.2f s", t3 - t2)
 
     cMaskView = np.asarray(cMask).reshape(ySize, xSize)
     mRDataView = np.asarray(mRData).reshape(ySize, xSize)
@@ -1312,7 +1315,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
     maskPixX += hwKernel
     nMaskPix = len(maskPixY)
 
-    sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
+    # sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
+    logger.debug("  Mask pixels to check: %d", nMaskPix)
 
     for pidx in range(nMaskPix):
         j = int(maskPixY[pidx])
@@ -1343,8 +1347,10 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
             mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
 
     t4 = time.time()
-    sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
-    sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
+    # sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
+    # sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
+    logger.debug("  Mask handling: %.2f s", t4 - t3)
+    logger.debug("  Total spatial_convolve_fast: %.2f s", t4 - t0)
 
     return vData
 
@@ -1702,9 +1708,11 @@ def mask_check_loop_jit(maskPixY, maskPixX, cMask2d, mRData1d,
 def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask, kcStep,
                                 hwKernel, fwKernel, kernel, kernel_coeffs,
                                 convolveVariance, kerFracMask,
-                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec, logger=None):
     # import time
     # t0 = time.time()
+    if logger is None:
+        logger = logging.getLogger('hotpants')
     fwSq = fwKernel * fwKernel
     dovar = variance is not None
 

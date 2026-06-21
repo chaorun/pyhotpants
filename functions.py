@@ -918,7 +918,7 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                       verbose, forceConvolve, rPixX, rPixY,
                       tUKThresh, iUKThresh, hwKSStamp,
                       fwStamp, nKSStamps, kerFitThresh,
-                      mRData1d, statSig):
+                      mRData1d, statSig, logger=None):
     sPixX = sXMax - sXMin + 1
     sPixY = sYMax - sYMin + 1
 
