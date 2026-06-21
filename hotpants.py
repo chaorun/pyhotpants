@@ -1755,13 +1755,13 @@ def psfCentersJit(iData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
 
 def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                       getCenters, rXBMin, rYBMin,
-                      ctNss, ctX0, ctY0, ctX, ctY, ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm, ctXss, ctYss, ctSscnt,
-                      ciNss, ciX0, ciY0, ciX, ciY, ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm, ciXss, ciYss, ciSscnt,
+                      lctNss_in, lctX0_in, lctY0_in, lctX_in, lctY_in, lctSumVal_in, lctMeanVal_in, lctMedian_in, lctMode_in, lctSd_in, lctFwhm_in, lctLfwhm_in, ctXss_in, ctYss_in, ctSscnt_in,
+                      lciNss_in, lciX0_in, lciY0_in, lciX_in, lciY_in, lciSumVal_in, lciMeanVal_in, lciMedian_in, lciMode_in, lciSd_in, lciFwhm_in, lciLfwhm_in, ciXss_in, ciYss_in, ciSscnt_in,
                       iRData1d, tRData1d, hardX, hardY,
                       verbose, forceConvolve, rPixX, rPixY,
                       tUKThresh, iUKThresh, hwKSStamp,
                       fwStamp, nKSStamps, kerFitThresh,
-                      mRData1d, statSig):
+                      mRData1d_in, statSig):
     # return build_stamps_numpy(sXMin, sXMax, sYMin, sYMax, niS, ntS,
     #                             getCenters, rXBMin, rYBMin, ciSa, ctSa,
     #                             iRData1d, tRData1d, hardX, hardY,
@@ -1772,92 +1772,113 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
     sPixX = sXMax - sXMin + 1
     sPixY = sYMax - sYMin + 1
 
+    # 读入本地变量
+    lctX0, lctY0 = lctX0_in, lctY0_in
+    lctX, lctY = lctX_in, lctY_in
+    lctSumVal, lctMeanVal = lctSumVal_in, lctMeanVal_in
+    lctMedian, lctMode = lctMedian_in, lctMode_in
+    lctSd, lctFwhm = lctSd_in, lctFwhm_in
+    lctLfwhm = lctLfwhm_in
+    lctNss = lctNss_in
+    lctXss = ctXss_in.copy()
+    lctYss = ctYss_in.copy()
+    lciX0, lciY0 = lciX0_in, lciY0_in
+    lciX, lciY = lciX_in, lciY_in
+    lciSumVal, lciMeanVal = lciSumVal_in, lciMeanVal_in
+    lciMedian, lciMode = lciMedian_in, lciMode_in
+    lciSd, lciFwhm = lciSd_in, lciFwhm_in
+    lciLfwhm = lciLfwhm_in
+    lciNss = lciNss_in
+    lciXss = ciXss_in.copy()
+    lciYss = ciYss_in.copy()
+    lmRData = mRData1d_in.copy()
+
     bbitt1 = FLAG_T_BAD
     bbitt2 = FLAG_T_SKIP
     bbiti1 = FLAG_I_BAD
     bbiti2 = FLAG_I_SKIP
 
-    mRData2d = mRData1d.reshape(rPixY, rPixX)
+    mRData2d = lmRData.reshape(rPixY, rPixX)
 
     if forceConvolve != "i":
         # if ctStamps[ntS]['nss'] == 0:
-        if ctNss[ntS] == 0:
+        if lctNss == 0:
             refArea, x0, y0, cx, cy = cut_stamp_numpy(
                 tRData1d, rPixX,
                 sXMin - rXBMin, sYMin - rYBMin,
                 sXMax - rXBMin, sYMax - rYBMin)
             # ctStamps[ntS]['x0'] = x0
-            ctX0[ntS] = x0
+            lctX0 = x0
             # ctStamps[ntS]['y0'] = y0
-            ctY0[ntS] = y0
+            lctY0 = y0
             # ctStamps[ntS]['x'] = cx
-            ctX[ntS] = cx
+            lctX = cx
             # ctStamps[ntS]['y'] = cy
-            ctY[ntS] = cy
+            lctY = cy
 
             refArea2d = refArea.reshape(sPixY, sPixX).astype(np.float32)
             result = get_stamp_stats3_numpy(
                 # refArea2d, ctStamps[ntS]['x0'], ctStamps[ntS]['y0'],
-                refArea2d, ctX0[ntS], ctY0[ntS],
+                refArea2d, lctX0, lctY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
             if result['return_code'] == 0:
                 # ctStamps[ntS]['sum'] = result['sum']
-                ctSumVal[ntS] = result['sum']
+                lctSumVal = result['sum']
                 # ctStamps[ntS]['mean'] = result['mean']
-                ctMeanVal[ntS] = result['mean']
+                lctMeanVal = result['mean']
                 # ctStamps[ntS]['median'] = result['median']
-                ctMedian[ntS] = result['median']
+                lctMedian = result['median']
                 # ctStamps[ntS]['mode'] = result['mode']
-                ctMode[ntS] = result['mode']
+                lctMode = result['mode']
                 # ctStamps[ntS]['sd'] = result['sd']
-                ctSd[ntS] = result['sd']
+                lctSd = result['sd']
                 # ctStamps[ntS]['fwhm'] = result['fwhm']
-                ctFwhm[ntS] = result['fwhm']
+                lctFwhm = result['fwhm']
                 # ctStamps[ntS]['lfwhm'] = result['lfwhm']
-                ctLfwhm[ntS] = result['lfwhm']
+                lctLfwhm = result['lfwhm']
 
     if forceConvolve != "t":
         # if ciStamps[niS]['nss'] == 0:
-        if ciNss[niS] == 0:
+        if lciNss == 0:
             refArea, x0, y0, cx, cy = cut_stamp_numpy(
                 iRData1d, rPixX,
                 sXMin - rXBMin, sYMin - rYBMin,
                 sXMax - rXBMin, sYMax - rYBMin)
             # ciStamps[niS]['x0'] = x0
-            ciX0[niS] = x0
+            lciX0 = x0
             # ciStamps[niS]['y0'] = y0
-            ciY0[niS] = y0
+            lciY0 = y0
             # ciStamps[niS]['x'] = cx
-            ciX[niS] = cx
+            lciX = cx
             # ciStamps[niS]['y'] = cy
-            ciY[niS] = cy
+            lciY = cy
 
             refArea2d = refArea.reshape(sPixY, sPixX).astype(np.float32)
             result = get_stamp_stats3_numpy(
                 # refArea2d, ciStamps[niS]['x0'], ciStamps[niS]['y0'],
-                refArea2d, ciX0[niS], ciY0[niS],
+                refArea2d, lciX0, lciY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
             if result['return_code'] == 0:
                 # ciStamps[niS]['sum'] = result['sum']
-                ciSumVal[niS] = result['sum']
+                lciSumVal = result['sum']
                 # ciStamps[niS]['mean'] = result['mean']
-                ciMeanVal[niS] = result['mean']
+                lciMeanVal = result['mean']
                 # ciStamps[niS]['median'] = result['median']
-                ciMedian[niS] = result['median']
+                lciMedian = result['median']
                 # ciStamps[niS]['mode'] = result['mode']
-                ciMode[niS] = result['mode']
+                lciMode = result['mode']
                 # ciStamps[niS]['sd'] = result['sd']
-                ciSd[niS] = result['sd']
+                lciSd = result['sd']
                 # ciStamps[niS]['fwhm'] = result['fwhm']
-                ciFwhm[niS] = result['fwhm']
+                lciFwhm = result['fwhm']
                 # ciStamps[niS]['lfwhm'] = result['lfwhm']
-                ciLfwhm[niS] = result['lfwhm']
+                lciLfwhm = result['lfwhm']
 
     if forceConvolve != "i":
         # nss = ctStamps[ntS]['nss']
-        nss = ctNss[ntS]
+        nss = lctNss
         # if getCenters:
         #     # get_psf_centers_numpy(
         #     #     ctStamps[ntS], tRData1d, sPixX, sPixY,
@@ -1872,26 +1893,26 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
         if getCenters:
             # [内联] get_psf_centers_numpy(ctSa, ntS, tRData1d, ...) 内联开始
             kerFitThresh_t = float(np.float32(kerFitThresh))
-            if ctNss[ntS] < nKSStamps:
+            if lctNss < nKSStamps:
                 allocSize = max(1, (sPixX * sPixY) // hwKSStamp)
                 xloc = np.zeros(allocSize, dtype=np.int32)
                 yloc = np.zeros(allocSize, dtype=np.int32)
                 peaks = np.zeros(allocSize, dtype=np.float64)
                 pcnt = psfCentersJit(
-                    tRData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
-                    tUKThresh, kerFitThresh_t, ctMode[ntS], 1.0 / ctFwhm[ntS],
-                    ctX0[ntS], ctY0[ntS], nKSStamps,
+                    tRData1d, lmRData, sPixX, sPixY, hwKSStamp, rPixX,
+                    tUKThresh, kerFitThresh_t, lctMode, 1.0 / lctFwhm,
+                    lctX0, lctY0, nKSStamps,
                     bbitt1 | bbitt2 | 0xbf, bbitt1, bbitt2,
                     xloc, yloc, peaks)
                 if pcnt > 0:
                     qs = np.argsort(peaks[:pcnt])
-                    nssOrig = ctNss[ntS]
+                    nssOrig = lctNss
                     idx = nssOrig
                     jj = 0
                     while jj < pcnt and idx < nKSStamps:
-                        ctXss[ntS, idx] = xloc[qs[pcnt - jj - 1]] + ctX0[ntS]
-                        ctYss[ntS, idx] = yloc[qs[pcnt - jj - 1]] + ctY0[ntS]
-                        ctNss[ntS] += 1
+                        lctXss[idx] = xloc[qs[pcnt - jj - 1]] + lctX0
+                        lctYss[idx] = yloc[qs[pcnt - jj - 1]] + lctY0
+                        lctNss += 1
                         idx += 1
                         jj += 1
             # [内联] get_psf_centers_numpy 内联结束
@@ -1910,38 +1931,38 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 check = check_psf_center_numba(
                     tRData1d,
                     # xmax - ctStamps[ntS]['x0'],
-                    xmax - ctX0[ntS],
+                    xmax - lctX0,
                     # ymax - ctStamps[ntS]['y0'],
-                    ymax - ctY0[ntS],
+                    ymax - lctY0,
                     sPixX, sPixY,
                     # ctStamps[ntS]['x0'], ctStamps[ntS]['y0'],
-                    ctX0[ntS], ctY0[ntS],
+                    lctX0, lctY0,
                     tUKThresh,
                     # ctStamps[ntS]['mode'],
-                    ctMode[ntS],
+                    lctMode,
                     # 1.0 / ctStamps[ntS]['fwhm'],
-                    1.0 / ctFwhm[ntS],
+                    1.0 / lctFwhm,
                     0, 0,
                     bbitt1 | bbitt2 | 0xbf, bbitt1,
-                    rPixX, hwKSStamp, mRData1d, kerFitThresh)
+                    rPixX, hwKSStamp, lmRData, kerFitThresh)
 
                 if check != 0.0:
                     for l in range(ymax - hwKSStamp, ymax + hwKSStamp + 1):
                         for k in range(xmax - hwKSStamp, xmax + hwKSStamp + 1):
                             nr2 = l + rPixX * k
                             if nr2 >= 0 and nr2 < rPixX * rPixY:
-                                mRData1d[nr2] = int(mRData1d[nr2]) | bbitt2
+                                lmRData[nr2] = int(lmRData[nr2]) | bbitt2
 
                     # ctStamps[ntS]['xss'][nss] = xmax
-                    ctXss[ntS, nss] = xmax
+                    lctXss[nss] = xmax
                     # ctStamps[ntS]['yss'][nss] = ymax
-                    ctYss[ntS, nss] = ymax
+                    lctYss[nss] = ymax
                     # ctStamps[ntS]['nss'] += 1
-                    ctNss[ntS] += 1
+                    lctNss += 1
 
     if forceConvolve != "t":
         # nss = ciStamps[niS]['nss']
-        nss = ciNss[niS]
+        nss = lciNss
         # if getCenters:
         #     # get_psf_centers_numpy(
         #     #     ciStamps[niS], iRData1d, sPixX, sPixY,
@@ -1956,26 +1977,26 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
         if getCenters:
             # [内联] get_psf_centers_numpy(ciSa, niS, iRData1d, ...) 内联开始
             kerFitThresh_i = float(np.float32(kerFitThresh))
-            if ciNss[niS] < nKSStamps:
+            if lciNss < nKSStamps:
                 allocSize = max(1, (sPixX * sPixY) // hwKSStamp)
                 xloc = np.zeros(allocSize, dtype=np.int32)
                 yloc = np.zeros(allocSize, dtype=np.int32)
                 peaks = np.zeros(allocSize, dtype=np.float64)
                 pcnt = psfCentersJit(
-                    iRData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
-                    iUKThresh, kerFitThresh_i, ciMode[niS], 1.0 / ciFwhm[niS],
-                    ciX0[niS], ciY0[niS], nKSStamps,
+                    iRData1d, lmRData, sPixX, sPixY, hwKSStamp, rPixX,
+                    iUKThresh, kerFitThresh_i, lciMode, 1.0 / lciFwhm,
+                    lciX0, lciY0, nKSStamps,
                     bbiti1 | bbiti2 | 0xbf, bbiti1, bbiti2,
                     xloc, yloc, peaks)
                 if pcnt > 0:
                     qs = np.argsort(peaks[:pcnt])
-                    nssOrig = ciNss[niS]
+                    nssOrig = lciNss
                     idx = nssOrig
                     jj = 0
                     while jj < pcnt and idx < nKSStamps:
-                        ciXss[niS, idx] = xloc[qs[pcnt - jj - 1]] + ciX0[niS]
-                        ciYss[niS, idx] = yloc[qs[pcnt - jj - 1]] + ciY0[niS]
-                        ciNss[niS] += 1
+                        lciXss[idx] = xloc[qs[pcnt - jj - 1]] + lciX0
+                        lciYss[idx] = yloc[qs[pcnt - jj - 1]] + lciY0
+                        lciNss += 1
                         idx += 1
                         jj += 1
             # [内联] get_psf_centers_numpy 内联结束
@@ -1994,34 +2015,38 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 check = check_psf_center_numba(
                     iRData1d,
                     # xmax - ciStamps[niS]['x0'],
-                    xmax - ciX0[niS],
+                    xmax - lciX0,
                     # ymax - ciStamps[niS]['y0'],
-                    ymax - ciY0[niS],
+                    ymax - lciY0,
                     sPixX, sPixY,
                     # ciStamps[niS]['x0'], ciStamps[niS]['y0'],
-                    ciX0[niS], ciY0[niS],
+                    lciX0, lciY0,
                     iUKThresh,
                     # ciStamps[niS]['mode'],
-                    ciMode[niS],
+                    lciMode,
                     # 1.0 / ciStamps[niS]['fwhm'],
-                    1.0 / ciFwhm[niS],
+                    1.0 / lciFwhm,
                     0, 0,
                     bbiti1 | bbiti2 | 0xbf, bbiti1,
-                    rPixX, hwKSStamp, mRData1d, kerFitThresh)
+                    rPixX, hwKSStamp, lmRData, kerFitThresh)
 
                 if check != 0.0:
                     for l in range(ymax - hwKSStamp, ymax + hwKSStamp + 1):
                         for k in range(xmax - hwKSStamp, xmax + hwKSStamp + 1):
                             nr2 = l + rPixX * k
                             if nr2 >= 0 and nr2 < rPixX * rPixY:
-                                mRData1d[nr2] = int(mRData1d[nr2]) | bbiti2
+                                lmRData[nr2] = int(lmRData[nr2]) | bbiti2
 
                     # ciStamps[niS]['xss'][nss] = xmax
                     # ciStamps[niS]['yss'][nss] = ymax
                     # ciStamps[niS]['nss'] += 1
-                    ciXss[niS, nss] = xmax
-                    ciYss[niS, nss] = ymax
-                    ciNss[niS] += 1
+                    lciXss[nss] = xmax
+                    lciYss[nss] = ymax
+                    lciNss += 1
+
+    return (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+            lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+            lmRData)
 
 
 def get_background_numpy(xi, yi, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY):
@@ -5290,23 +5315,45 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                             #     tUKThresh, iUKThresh, hwKSStamp,
                             #     fwStamp, nKSStamps, kerFitThresh,
                             #     mDataCopy, statSig)
-                            buildStampsNumba(
+                            (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+                             lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+                             lmRData) = buildStampsNumba(
                                 sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
                                 rXBMin, rYBMin,
                                 # ctSa 扁平
-                                ctNss, ctX0, ctY0, ctX, ctY,
-                                ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
-                                ctXss, ctYss, ctSscnt,
+                                ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
+                                ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
+                                ctXss[ntS].copy(), ctYss[ntS].copy(), ctSscnt[ntS],
                                 # ciSa 扁平
-                                ciNss, ciX0, ciY0, ciX, ciY,
-                                ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
-                                ciXss, ciYss, ciSscnt,
+                                ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
+                                ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
+                                ciXss[niS].copy(), ciYss[niS].copy(), ciSscnt[niS],
                                 iRData1d, tRData1d,
                                 xcmp[m] - rXBMin, ycmp[m] - rYBMin,
                                 verbose, localForceConvolve, rPixX, rPixY,
                                 tUKThresh, iUKThresh, hwKSStamp,
                                 fwStamp, nKSStamps, kerFitThresh,
-                                mRData1d, statSig)
+                                mRData1d.copy(), statSig)
+                            # 写回
+                            ctX0[ntS], ctY0[ntS] = lctX0, lctY0
+                            ctX[ntS], ctY[ntS] = lctX, lctY
+                            ctSumVal[ntS], ctMeanVal[ntS] = lctSumVal, lctMeanVal
+                            ctMedian[ntS], ctMode[ntS] = lctMedian, lctMode
+                            ctSd[ntS], ctFwhm[ntS] = lctSd, lctFwhm
+                            ctLfwhm[ntS] = lctLfwhm
+                            ctNss[ntS] = lctNss
+                            ctXss[ntS] = lctXss
+                            ctYss[ntS] = lctYss
+                            ciX0[niS], ciY0[niS] = lciX0, lciY0
+                            ciX[niS], ciY[niS] = lciX, lciY
+                            ciSumVal[niS], ciMeanVal[niS] = lciSumVal, lciMeanVal
+                            ciMedian[niS], ciMode[niS] = lciMedian, lciMode
+                            ciSd[niS], ciFwhm[niS] = lciSd, lciFwhm
+                            ciLfwhm[niS] = lciLfwhm
+                            ciNss[niS] = lciNss
+                            ciXss[niS] = lciXss
+                            ciYss[niS] = lciYss
+                            mRData1d[:] = lmRData
                             # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
                             # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
                             # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
@@ -5369,22 +5416,41 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                         #     tUKThresh, iUKThresh, hwKSStamp,
                         #     fwStamp, nKSStamps, kerFitThresh,
                         #     mDataCopy, statSig)
-                        buildStampsNumba(
+                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+                         lmRData) = buildStampsNumba(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
                             rXBMin, rYBMin,
-                            # ctSa 扁平
-                            ctNss, ctX0, ctY0, ctX, ctY,
-                            ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
-                            ctXss, ctYss, ctSscnt,
-                            # ciSa 扁平
-                            ciNss, ciX0, ciY0, ciX, ciY,
-                            ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
-                            ciXss, ciYss, ciSscnt,
+                            ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
+                            ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
+                            ctXss[ntS].copy(), ctYss[ntS].copy(), ctSscnt[ntS],
+                            ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
+                            ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
+                            ciXss[niS].copy(), ciYss[niS].copy(), ciSscnt[niS],
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
                             fwStamp, nKSStamps, kerFitThresh,
-                            mRData1d, statSig)
+                            mRData1d.copy(), statSig)
+                        ctX0[ntS], ctY0[ntS] = lctX0, lctY0
+                        ctX[ntS], ctY[ntS] = lctX, lctY
+                        ctSumVal[ntS], ctMeanVal[ntS] = lctSumVal, lctMeanVal
+                        ctMedian[ntS], ctMode[ntS] = lctMedian, lctMode
+                        ctSd[ntS], ctFwhm[ntS] = lctSd, lctFwhm
+                        ctLfwhm[ntS] = lctLfwhm
+                        ctNss[ntS] = lctNss
+                        ctXss[ntS] = lctXss
+                        ctYss[ntS] = lctYss
+                        ciX0[niS], ciY0[niS] = lciX0, lciY0
+                        ciX[niS], ciY[niS] = lciX, lciY
+                        ciSumVal[niS], ciMeanVal[niS] = lciSumVal, lciMeanVal
+                        ciMedian[niS], ciMode[niS] = lciMedian, lciMode
+                        ciSd[niS], ciFwhm[niS] = lciSd, lciFwhm
+                        ciLfwhm[niS] = lciLfwhm
+                        ciNss[niS] = lciNss
+                        ciXss[niS] = lciXss
+                        ciYss[niS] = lciYss
+                        mRData1d[:] = lmRData
                         # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
                         # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
                         # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
@@ -5438,22 +5504,44 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                         #     tUKThresh, iUKThresh, hwKSStamp,
                         #     fwStamp, nKSStamps, kerFitThresh,
                         #     mDataCopy, statSig)
-                        buildStampsNumba(
-                            sXMin, sXMax, sYMin, sYMax, niS, ntS, 0,
+                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+                         lmRData) = buildStampsNumba(
+                            sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
                             rXBMin, rYBMin,
                             # ctSa 扁平
-                            ctNss, ctX0, ctY0, ctX, ctY,
-                            ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
-                            ctXss, ctYss, ctSscnt,
+                            ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
+                            ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
+                            ctXss[ntS].copy(), ctYss[ntS].copy(), ctSscnt[ntS],
                             # ciSa 扁平
-                            ciNss, ciX0, ciY0, ciX, ciY,
-                            ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
-                            ciXss, ciYss, ciSscnt,
+                            ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
+                            ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
+                            ciXss[niS].copy(), ciYss[niS].copy(), ciSscnt[niS],
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
                             fwStamp, nKSStamps, kerFitThresh,
-                            mRData1d, statSig)
+                            mRData1d.copy(), statSig)
+                        # 写回
+                        ctX0[ntS], ctY0[ntS] = lctX0, lctY0
+                        ctX[ntS], ctY[ntS] = lctX, lctY
+                        ctSumVal[ntS], ctMeanVal[ntS] = lctSumVal, lctMeanVal
+                        ctMedian[ntS], ctMode[ntS] = lctMedian, lctMode
+                        ctSd[ntS], ctFwhm[ntS] = lctSd, lctFwhm
+                        ctLfwhm[ntS] = lctLfwhm
+                        ctNss[ntS] = lctNss
+                        ctXss[ntS] = lctXss
+                        ctYss[ntS] = lctYss
+                        ciX0[niS], ciY0[niS] = lciX0, lciY0
+                        ciX[niS], ciY[niS] = lciX, lciY
+                        ciSumVal[niS], ciMeanVal[niS] = lciSumVal, lciMeanVal
+                        ciMedian[niS], ciMode[niS] = lciMedian, lciMode
+                        ciSd[niS], ciFwhm[niS] = lciSd, lciFwhm
+                        ciLfwhm[niS] = lciLfwhm
+                        ciNss[niS] = lciNss
+                        ciXss[niS] = lciXss
+                        ciYss[niS] = lciYss
+                        mRData1d[:] = lmRData
                         # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
                         # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
                         # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None
@@ -5506,22 +5594,41 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                         #     tUKThresh, iUKThresh, hwKSStamp,
                         #     fwStamp, nKSStamps, kerFitThresh,
                         #     mDataCopy, statSig)
-                        buildStampsNumba(
+                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+                         lmRData) = buildStampsNumba(
                             sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
                             rXBMin, rYBMin,
-                            # ctSa 扁平
-                            ctNss, ctX0, ctY0, ctX, ctY,
-                            ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm,
-                            ctXss, ctYss, ctSscnt,
-                            # ciSa 扁平
-                            ciNss, ciX0, ciY0, ciX, ciY,
-                            ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm,
-                            ciXss, ciYss, ciSscnt,
+                            ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
+                            ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
+                            ctXss[ntS].copy(), ctYss[ntS].copy(), ctSscnt[ntS],
+                            ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
+                            ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
+                            ciXss[niS].copy(), ciYss[niS].copy(), ciSscnt[niS],
                             iRData1d, tRData1d, 0, 0,
                             verbose, localForceConvolve, rPixX, rPixY,
                             tUKThresh, iUKThresh, hwKSStamp,
                             fwStamp, nKSStamps, kerFitThresh,
-                            mRData1d, statSig)
+                            mRData1d.copy(), statSig)
+                        ctX0[ntS], ctY0[ntS] = lctX0, lctY0
+                        ctX[ntS], ctY[ntS] = lctX, lctY
+                        ctSumVal[ntS], ctMeanVal[ntS] = lctSumVal, lctMeanVal
+                        ctMedian[ntS], ctMode[ntS] = lctMedian, lctMode
+                        ctSd[ntS], ctFwhm[ntS] = lctSd, lctFwhm
+                        ctLfwhm[ntS] = lctLfwhm
+                        ctNss[ntS] = lctNss
+                        ctXss[ntS] = lctXss
+                        ctYss[ntS] = lctYss
+                        ciX0[niS], ciY0[niS] = lciX0, lciY0
+                        ciX[niS], ciY[niS] = lciX, lciY
+                        ciSumVal[niS], ciMeanVal[niS] = lciSumVal, lciMeanVal
+                        ciMedian[niS], ciMode[niS] = lciMedian, lciMode
+                        ciSd[niS], ciFwhm[niS] = lciSd, lciFwhm
+                        ciLfwhm[niS] = lciLfwhm
+                        ciNss[niS] = lciNss
+                        ciXss[niS] = lciXss
+                        ciYss[niS] = lciYss
+                        mRData1d[:] = lmRData
                         # bsNssNewT = int(ctCopy.nss[ntS]) if ctCopy is not None else -1
                         # bsNssNewI = int(ciCopy.nss[niS]) if ciCopy is not None else -1
                         # bsXssNewT = ctCopy.xss[ntS] if ctCopy is not None else None

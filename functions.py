@@ -921,100 +921,121 @@ def psfCentersJit(iData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
 
 def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                       getCenters, rXBMin, rYBMin,
-                      ctNss, ctX0, ctY0, ctX, ctY, ctSumVal, ctMeanVal, ctMedian, ctMode, ctSd, ctFwhm, ctLfwhm, ctXss, ctYss, ctSscnt,
-                      ciNss, ciX0, ciY0, ciX, ciY, ciSumVal, ciMeanVal, ciMedian, ciMode, ciSd, ciFwhm, ciLfwhm, ciXss, ciYss, ciSscnt,
+                      lctNss_in, lctX0_in, lctY0_in, lctX_in, lctY_in, lctSumVal_in, lctMeanVal_in, lctMedian_in, lctMode_in, lctSd_in, lctFwhm_in, lctLfwhm_in, ctXss_in, ctYss_in, ctSscnt_in,
+                      lciNss_in, lciX0_in, lciY0_in, lciX_in, lciY_in, lciSumVal_in, lciMeanVal_in, lciMedian_in, lciMode_in, lciSd_in, lciFwhm_in, lciLfwhm_in, ciXss_in, ciYss_in, ciSscnt_in,
                       iRData1d, tRData1d, hardX, hardY,
                       verbose, forceConvolve, rPixX, rPixY,
                       tUKThresh, iUKThresh, hwKSStamp,
                       fwStamp, nKSStamps, kerFitThresh,
-                       mRData1d, statSig):
+                       mRData1d_in, statSig):
     logger.debug("  build_stamps: niS=%d ntS=%d sXMin=%d sYMin=%d sPix=%dx%d fc=%s getCenters=%d",
                  niS, ntS, sXMin, sYMin, sXMax - sXMin + 1, sYMax - sYMin + 1,
                  forceConvolve, getCenters)
     sPixX = sXMax - sXMin + 1
     sPixY = sYMax - sYMin + 1
 
+    # 读入本地变量 (ntS/niS 位置)
+    lctX0, lctY0 = lctX0_in, lctY0_in
+    lctX, lctY = lctX_in, lctY_in
+    lctSumVal, lctMeanVal = lctSumVal_in, lctMeanVal_in
+    lctMedian, lctMode = lctMedian_in, lctMode_in
+    lctSd, lctFwhm = lctSd_in, lctFwhm_in
+    lctLfwhm = lctLfwhm_in
+    lctNss = lctNss_in
+    lctXss = ctXss_in.copy()
+    lctYss = ctYss_in.copy()
+    lciX0, lciY0 = lciX0_in, lciY0_in
+    lciX, lciY = lciX_in, lciY_in
+    lciSumVal, lciMeanVal = lciSumVal_in, lciMeanVal_in
+    lciMedian, lciMode = lciMedian_in, lciMode_in
+    lciSd, lciFwhm = lciSd_in, lciFwhm_in
+    lciLfwhm = lciLfwhm_in
+    lciNss = lciNss_in
+    lciXss = ciXss_in.copy()
+    lciYss = ciYss_in.copy()
+    lmRData = mRData1d_in.copy()
+
+    mRData2d = lmRData.reshape(rPixY, rPixX)
+
     bbitt1 = FLAG_T_BAD
     bbitt2 = FLAG_T_SKIP
     bbiti1 = FLAG_I_BAD
     bbiti2 = FLAG_I_SKIP
 
-    mRData2d = mRData1d.reshape(rPixY, rPixX)
-
     if forceConvolve != "i":
-        if ctNss[ntS] == 0:
+        if lctNss == 0:
             refArea, x0, y0, cx, cy = cut_stamp_numpy(
                 tRData1d, rPixX,
                 sXMin - rXBMin, sYMin - rYBMin,
                 sXMax - rXBMin, sYMax - rYBMin)
-            ctX0[ntS] = x0
-            ctY0[ntS] = y0
-            ctX[ntS] = cx
-            ctY[ntS] = cy
+            lctX0 = x0
+            lctY0 = y0
+            lctX = cx
+            lctY = cy
 
             refArea2d = refArea.reshape(sPixY, sPixX).astype(np.float32)
             result = get_stamp_stats3_numpy(
-                refArea2d, ctX0[ntS], ctY0[ntS],
+                refArea2d, lctX0, lctY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
             if result['return_code'] == 0:
-                ctSumVal[ntS] = result['sum']
-                ctMeanVal[ntS] = result['mean']
-                ctMedian[ntS] = result['median']
-                ctMode[ntS] = result['mode']
-                ctSd[ntS] = result['sd']
-                ctFwhm[ntS] = result['fwhm']
-                ctLfwhm[ntS] = result['lfwhm']
+                lctSumVal = result['sum']
+                lctMeanVal = result['mean']
+                lctMedian = result['median']
+                lctMode = result['mode']
+                lctSd = result['sd']
+                lctFwhm = result['fwhm']
+                lctLfwhm = result['lfwhm']
 
     if forceConvolve != "t":
-        if ciNss[niS] == 0:
+        if lciNss == 0:
             refArea, x0, y0, cx, cy = cut_stamp_numpy(
                 iRData1d, rPixX,
                 sXMin - rXBMin, sYMin - rYBMin,
                 sXMax - rXBMin, sYMax - rYBMin)
-            ciX0[niS] = x0
-            ciY0[niS] = y0
-            ciX[niS] = cx
-            ciY[niS] = cy
+            lciX0 = x0
+            lciY0 = y0
+            lciX = cx
+            lciY = cy
 
             refArea2d = refArea.reshape(sPixY, sPixX).astype(np.float32)
             result = get_stamp_stats3_numpy(
-                refArea2d, ciX0[niS], ciY0[niS],
+                refArea2d, lciX0, lciY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
             if result['return_code'] == 0:
-                ciSumVal[niS] = result['sum']
-                ciMeanVal[niS] = result['mean']
-                ciMedian[niS] = result['median']
-                ciMode[niS] = result['mode']
-                ciSd[niS] = result['sd']
-                ciFwhm[niS] = result['fwhm']
-                ciLfwhm[niS] = result['lfwhm']
+                lciSumVal = result['sum']
+                lciMeanVal = result['mean']
+                lciMedian = result['median']
+                lciMode = result['mode']
+                lciSd = result['sd']
+                lciFwhm = result['fwhm']
+                lciLfwhm = result['lfwhm']
 
     if forceConvolve != "i":
-        nss = ctNss[ntS]
+        nss = lctNss
         if getCenters:
             kerFitThresh_t = float(np.float32(kerFitThresh))
-            if ctNss[ntS] < nKSStamps:
+            if lctNss < nKSStamps:
                 allocSize = max(1, (sPixX * sPixY) // hwKSStamp)
                 xloc = np.zeros(allocSize, dtype=np.int32)
                 yloc = np.zeros(allocSize, dtype=np.int32)
                 peaks = np.zeros(allocSize, dtype=np.float64)
                 pcnt = psfCentersVectorized(
-                    tRData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
-                    tUKThresh, kerFitThresh_t, ctMode[ntS], 1.0 / ctFwhm[ntS],
-                    ctX0[ntS], ctY0[ntS], nKSStamps,
+                    tRData1d, lmRData, sPixX, sPixY, hwKSStamp, rPixX,
+                    tUKThresh, kerFitThresh_t, lctMode, 1.0 / lctFwhm,
+                    lctX0, lctY0, nKSStamps,
                     bbitt1 | bbitt2 | 0xbf, bbitt1, bbitt2,
                     xloc, yloc, peaks)
                 if pcnt > 0:
                     qs = np.argsort(peaks[:pcnt])
-                    nssOrig = ctNss[ntS]
+                    nssOrig = lctNss
                     idx = nssOrig
                     jj = 0
                     while jj < pcnt and idx < nKSStamps:
-                        ctXss[ntS, idx] = xloc[qs[pcnt - jj - 1]] + ctX0[ntS]
-                        ctYss[ntS, idx] = yloc[qs[pcnt - jj - 1]] + ctY0[ntS]
-                        ctNss[ntS] += 1
+                        lctXss[idx] = xloc[qs[pcnt - jj - 1]] + lctX0
+                        lctYss[idx] = yloc[qs[pcnt - jj - 1]] + lctY0
+                        lctNss += 1
                         idx += 1
                         jj += 1
         else:
@@ -1031,52 +1052,52 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
 
                 check = check_psf_center_numba(
                     tRData1d,
-                    xmax - ctX0[ntS],
-                    ymax - ctY0[ntS],
+                    xmax - lctX0,
+                    ymax - lctY0,
                     sPixX, sPixY,
-                    ctX0[ntS], ctY0[ntS],
+                    lctX0, lctY0,
                     tUKThresh,
-                    ctMode[ntS],
-                    1.0 / ctFwhm[ntS],
+                    lctMode,
+                    1.0 / lctFwhm,
                     0, 0,
                     bbitt1 | bbitt2 | 0xbf, bbitt1,
-                    rPixX, hwKSStamp, mRData1d, kerFitThresh)
+                    rPixX, hwKSStamp, lmRData, kerFitThresh)
 
                 if check != 0.0:
                     for l in range(ymax - hwKSStamp, ymax + hwKSStamp + 1):
                         for k in range(xmax - hwKSStamp, xmax + hwKSStamp + 1):
                             nr2 = l + rPixX * k
                             if nr2 >= 0 and nr2 < rPixX * rPixY:
-                                mRData1d[nr2] = int(mRData1d[nr2]) | bbitt2
+                                lmRData[nr2] = int(lmRData[nr2]) | bbitt2
 
-                    ctXss[ntS, nss] = xmax
-                    ctYss[ntS, nss] = ymax
-                    ctNss[ntS] += 1
+                    lctXss[nss] = xmax
+                    lctYss[nss] = ymax
+                    lctNss += 1
 
     if forceConvolve != "t":
-        nss = ciNss[niS]
+        nss = lciNss
         if getCenters:
             kerFitThresh_i = float(np.float32(kerFitThresh))
-            if ciNss[niS] < nKSStamps:
+            if lciNss < nKSStamps:
                 allocSize = max(1, (sPixX * sPixY) // hwKSStamp)
                 xloc = np.zeros(allocSize, dtype=np.int32)
                 yloc = np.zeros(allocSize, dtype=np.int32)
                 peaks = np.zeros(allocSize, dtype=np.float64)
                 pcnt = psfCentersVectorized(
-                    iRData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
-                    iUKThresh, kerFitThresh_i, ciMode[niS], 1.0 / ciFwhm[niS],
-                    ciX0[niS], ciY0[niS], nKSStamps,
+                    iRData1d, lmRData, sPixX, sPixY, hwKSStamp, rPixX,
+                    iUKThresh, kerFitThresh_i, lciMode, 1.0 / lciFwhm,
+                    lciX0, lciY0, nKSStamps,
                     bbiti1 | bbiti2 | 0xbf, bbiti1, bbiti2,
                     xloc, yloc, peaks)
                 if pcnt > 0:
                     qs = np.argsort(peaks[:pcnt])
-                    nssOrig = ciNss[niS]
+                    nssOrig = lciNss
                     idx = nssOrig
                     jj = 0
                     while jj < pcnt and idx < nKSStamps:
-                        ciXss[niS, idx] = xloc[qs[pcnt - jj - 1]] + ciX0[niS]
-                        ciYss[niS, idx] = yloc[qs[pcnt - jj - 1]] + ciY0[niS]
-                        ciNss[niS] += 1
+                        lciXss[idx] = xloc[qs[pcnt - jj - 1]] + lciX0
+                        lciYss[idx] = yloc[qs[pcnt - jj - 1]] + lciY0
+                        lciNss += 1
                         idx += 1
                         jj += 1
         else:
@@ -1093,27 +1114,31 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
 
                 check = check_psf_center_numba(
                     iRData1d,
-                    xmax - ciX0[niS],
-                    ymax - ciY0[niS],
+                    xmax - lciX0,
+                    ymax - lciY0,
                     sPixX, sPixY,
-                    ciX0[niS], ciY0[niS],
+                    lciX0, lciY0,
                     iUKThresh,
-                    ciMode[niS],
-                    1.0 / ciFwhm[niS],
+                    lciMode,
+                    1.0 / lciFwhm,
                     0, 0,
                     bbiti1 | bbiti2 | 0xbf, bbiti1,
-                    rPixX, hwKSStamp, mRData1d, kerFitThresh)
+                    rPixX, hwKSStamp, lmRData, kerFitThresh)
 
                 if check != 0.0:
                     for l in range(ymax - hwKSStamp, ymax + hwKSStamp + 1):
                         for k in range(xmax - hwKSStamp, xmax + hwKSStamp + 1):
                             nr2 = l + rPixX * k
                             if nr2 >= 0 and nr2 < rPixX * rPixY:
-                                mRData1d[nr2] = int(mRData1d[nr2]) | bbiti2
+                                lmRData[nr2] = int(lmRData[nr2]) | bbiti2
 
-                    ciXss[niS, nss] = xmax
-                    ciYss[niS, nss] = ymax
-                    ciNss[niS] += 1
+                    lciXss[nss] = xmax
+                    lciYss[nss] = ymax
+                    lciNss += 1
+
+    return (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+            lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+            lmRData)
 
 
 def lubksb_numpy(a, n, indx, b):
