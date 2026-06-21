@@ -222,6 +222,6 @@ PYTHONPATH=. python3 examples/test_precision.py
 
 ## 注意事项
 
-1. 输入图像必须为 `float32` 类型的二维 numpy 数组
+1. 输入图像可以是 `float32` 或 `float64` 类型的二维 numpy 数组，内部自动转换为 float32
 2. 模板和科学图像尺寸可以不同，输出尺寸取两者的最大值
 3. `c='b'` 时程序自动选择卷积方向

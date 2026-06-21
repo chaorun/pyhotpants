@@ -57,7 +57,7 @@ logger = logging.getLogger('hotpants')
 logging.getLogger('numba').setLevel(logging.WARNING)
 
 tmpl = fits.getdata('template.fits').astype(np.float32)
-sci = fits.getdata('science.fits').astype(np.float32)
+sci = fits.getdata('science.fits')  # float32 或 float64，自动转换
 
 diff, noise, conv, mask, stats = hotpants(
     inim=sci, tmplim=tmpl,
