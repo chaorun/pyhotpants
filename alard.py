@@ -8,7 +8,7 @@ from .functions import (ZEROVAL, MAXVAL,
     FLAG_BAD_PIXVAL, FLAG_SAT_PIXEL, FLAG_NEG_PIXEL, FLAG_SPREAD,
     FLAG_MASKED, FLAG_BORDER, FLAG_SUBREGION, FLAG_INVALID,
     BUILD_STAMP_FLAT_CACHE, LAST_SIGMA_CLIP, LAST_N, LAST_MEDIAN,
-    StampsArray, Ran1,
+    Ran1,
     sigma_clip_numpy, get_noise_stats3_numpy,
     insert_subregion_flt_numpy, insert_subregion_int_numpy,
     cut_stamp_numpy, get_stamp_stats3_numpy, bin_quartile_numpy,
@@ -17,7 +17,7 @@ from .functions import (ZEROVAL, MAXVAL,
     quick_sort_impl, quick_sort_recurse,
     psfCentersJit, buildStampsNumba,
     lubksb_numpy, ludcmp_numpy,
-    make_noise_image4_numpy, build_stamps_flatten_helper,
+    make_noise_image4_numpy,
 )
 
 

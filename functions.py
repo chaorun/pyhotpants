@@ -29,108 +29,108 @@ LAST_N = None
 LAST_MEDIAN = None
 
 
-class StampsArray:
-    def __init__(self, nS, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC):
-        fwSq = fwKSStamp * fwKSStamp
-        nVec = nCompKer + nBGVectors
-
-        self.nS = nS
-        self.nKSStamps = nKSStamps
-        self.fwKSStamp = fwKSStamp
-        self.nCompKer = nCompKer
-        self.nBGVectors = nBGVectors
-        self.nC = nC
-        self.fwSq = fwSq
-        self.nVec = nVec
-
-        self.sscnt   = np.zeros(nS, dtype=np.int32)
-        self.nss     = np.zeros(nS, dtype=np.int32)
-        self.x0      = np.zeros(nS, dtype=np.int32)
-        self.y0      = np.zeros(nS, dtype=np.int32)
-        self.x       = np.zeros(nS, dtype=np.int32)
-        self.y       = np.zeros(nS, dtype=np.int32)
-
-        self.xss     = np.zeros((nS, nKSStamps), dtype=np.int32)
-        self.yss     = np.zeros((nS, nKSStamps), dtype=np.int32)
-
-        self.vectors  = np.zeros((nS, nVec, fwSq), dtype=np.float64)
-        self.mat      = np.zeros((nS, nC, nC), dtype=np.float64)
-        self.scprod   = np.zeros((nS, nC), dtype=np.float64)
-        self.krefArea = np.zeros((nS, fwSq), dtype=np.float64)
-
-        self.chi2    = np.zeros(nS, dtype=np.float64)
-        self.norm    = np.zeros(nS, dtype=np.float64)
-        self.diff    = np.zeros(nS, dtype=np.float64)
-        self.sum_val = np.zeros(nS, dtype=np.float64)
-        self.mean_val = np.zeros(nS, dtype=np.float64)
-        self.median  = np.zeros(nS, dtype=np.float64)
-        self.mode    = np.zeros(nS, dtype=np.float64)
-        self.sd      = np.zeros(nS, dtype=np.float64)
-        self.fwhm    = np.zeros(nS, dtype=np.float64)
-        self.lfwhm   = np.zeros(nS, dtype=np.float64)
-
-        self.valid   = np.zeros(nS, dtype=np.bool_)
-        self.ntS     = 0
-
-    @staticmethod
-    def subset(src, mask):
-        nSub = mask.sum()
-        if nSub == 0:
-            return None
-        sa = StampsArray(nSub, src.nKSStamps, src.fwKSStamp, src.nCompKer, src.nBGVectors, src.nC)
-        sa.sscnt[:]     = src.sscnt[mask]
-        sa.nss[:]       = src.nss[mask]
-        sa.x0[:]        = src.x0[mask]
-        sa.y0[:]        = src.y0[mask]
-        sa.x[:]         = src.x[mask]
-        sa.y[:]         = src.y[mask]
-        sa.xss[:]       = src.xss[mask]
-        sa.yss[:]       = src.yss[mask]
-        sa.vectors[:]   = src.vectors[mask]
-        sa.mat[:]       = src.mat[mask]
-        sa.scprod[:]    = src.scprod[mask]
-        sa.krefArea[:]  = src.krefArea[mask]
-        sa.chi2[:]      = src.chi2[mask]
-        sa.norm[:]      = src.norm[mask]
-        sa.diff[:]      = src.diff[mask]
-        sa.sum_val[:]   = src.sum_val[mask]
-        sa.mean_val[:]  = src.mean_val[mask]
-        sa.median[:]    = src.median[mask]
-        sa.mode[:]      = src.mode[mask]
-        sa.sd[:]        = src.sd[mask]
-        sa.fwhm[:]      = src.fwhm[mask]
-        sa.lfwhm[:]     = src.lfwhm[mask]
-        sa.valid[:]     = src.valid[mask]
-        sa.ntS          = nSub
-        return sa
-
-    def deepCopy(self):
-        cp = StampsArray(self.nS, self.nKSStamps, self.fwKSStamp, self.nCompKer, self.nBGVectors, self.nC)
-        cp.sscnt[:] = self.sscnt
-        cp.nss[:] = self.nss
-        cp.x0[:] = self.x0
-        cp.y0[:] = self.y0
-        cp.x[:] = self.x
-        cp.y[:] = self.y
-        cp.xss[:] = self.xss
-        cp.yss[:] = self.yss
-        cp.vectors[:] = self.vectors
-        cp.mat[:] = self.mat
-        cp.scprod[:] = self.scprod
-        cp.krefArea[:] = self.krefArea
-        cp.chi2[:] = self.chi2
-        cp.norm[:] = self.norm
-        cp.diff[:] = self.diff
-        cp.sum_val[:] = self.sum_val
-        cp.mean_val[:] = self.mean_val
-        cp.median[:] = self.median
-        cp.mode[:] = self.mode
-        cp.sd[:] = self.sd
-        cp.fwhm[:] = self.fwhm
-        cp.lfwhm[:] = self.lfwhm
-        cp.valid[:] = self.valid
-        cp.ntS = self.ntS
-        return cp
+# class StampsArray:
+#     def __init__(self, nS, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC):
+#         fwSq = fwKSStamp * fwKSStamp
+#         nVec = nCompKer + nBGVectors
+#
+#         self.nS = nS
+#         self.nKSStamps = nKSStamps
+#         self.fwKSStamp = fwKSStamp
+#         self.nCompKer = nCompKer
+#         self.nBGVectors = nBGVectors
+#         self.nC = nC
+#         self.fwSq = fwSq
+#         self.nVec = nVec
+#
+#         self.sscnt   = np.zeros(nS, dtype=np.int32)
+#         self.nss     = np.zeros(nS, dtype=np.int32)
+#         self.x0      = np.zeros(nS, dtype=np.int32)
+#         self.y0      = np.zeros(nS, dtype=np.int32)
+#         self.x       = np.zeros(nS, dtype=np.int32)
+#         self.y       = np.zeros(nS, dtype=np.int32)
+#
+#         self.xss     = np.zeros((nS, nKSStamps), dtype=np.int32)
+#         self.yss     = np.zeros((nS, nKSStamps), dtype=np.int32)
+#
+#         self.vectors  = np.zeros((nS, nVec, fwSq), dtype=np.float64)
+#         self.mat      = np.zeros((nS, nC, nC), dtype=np.float64)
+#         self.scprod   = np.zeros((nS, nC), dtype=np.float64)
+#         self.krefArea = np.zeros((nS, fwSq), dtype=np.float64)
+#
+#         self.chi2    = np.zeros(nS, dtype=np.float64)
+#         self.norm    = np.zeros(nS, dtype=np.float64)
+#         self.diff    = np.zeros(nS, dtype=np.float64)
+#         self.sum_val = np.zeros(nS, dtype=np.float64)
+#         self.mean_val = np.zeros(nS, dtype=np.float64)
+#         self.median  = np.zeros(nS, dtype=np.float64)
+#         self.mode    = np.zeros(nS, dtype=np.float64)
+#         self.sd      = np.zeros(nS, dtype=np.float64)
+#         self.fwhm    = np.zeros(nS, dtype=np.float64)
+#         self.lfwhm   = np.zeros(nS, dtype=np.float64)
+#
+#         self.valid   = np.zeros(nS, dtype=np.bool_)
+#         self.ntS     = 0
+#
+#     @staticmethod
+#     def subset(src, mask):
+#         nSub = mask.sum()
+#         if nSub == 0:
+#             return None
+#         sa = StampsArray(nSub, src.nKSStamps, src.fwKSStamp, src.nCompKer, src.nBGVectors, src.nC)
+#         sa.sscnt[:]     = src.sscnt[mask]
+#         sa.nss[:]       = src.nss[mask]
+#         sa.x0[:]        = src.x0[mask]
+#         sa.y0[:]        = src.y0[mask]
+#         sa.x[:]         = src.x[mask]
+#         sa.y[:]         = src.y[mask]
+#         sa.xss[:]       = src.xss[mask]
+#         sa.yss[:]       = src.yss[mask]
+#         sa.vectors[:]   = src.vectors[mask]
+#         sa.mat[:]       = src.mat[mask]
+#         sa.scprod[:]    = src.scprod[mask]
+#         sa.krefArea[:]  = src.krefArea[mask]
+#         sa.chi2[:]      = src.chi2[mask]
+#         sa.norm[:]      = src.norm[mask]
+#         sa.diff[:]      = src.diff[mask]
+#         sa.sum_val[:]   = src.sum_val[mask]
+#         sa.mean_val[:]  = src.mean_val[mask]
+#         sa.median[:]    = src.median[mask]
+#         sa.mode[:]      = src.mode[mask]
+#         sa.sd[:]        = src.sd[mask]
+#         sa.fwhm[:]      = src.fwhm[mask]
+#         sa.lfwhm[:]     = src.lfwhm[mask]
+#         sa.valid[:]     = src.valid[mask]
+#         sa.ntS          = nSub
+#         return sa
+#
+#     def deepCopy(self):
+#         cp = StampsArray(self.nS, self.nKSStamps, self.fwKSStamp, self.nCompKer, self.nBGVectors, self.nC)
+#         cp.sscnt[:] = self.sscnt
+#         cp.nss[:] = self.nss
+#         cp.x0[:] = self.x0
+#         cp.y0[:] = self.y0
+#         cp.x[:] = self.x
+#         cp.y[:] = self.y
+#         cp.xss[:] = self.xss
+#         cp.yss[:] = self.yss
+#         cp.vectors[:] = self.vectors
+#         cp.mat[:] = self.mat
+#         cp.scprod[:] = self.scprod
+#         cp.krefArea[:] = self.krefArea
+#         cp.chi2[:] = self.chi2
+#         cp.norm[:] = self.norm
+#         cp.diff[:] = self.diff
+#         cp.sum_val[:] = self.sum_val
+#         cp.mean_val[:] = self.mean_val
+#         cp.median[:] = self.median
+#         cp.mode[:] = self.mode
+#         cp.sd[:] = self.sd
+#         cp.fwhm[:] = self.fwhm
+#         cp.lfwhm[:] = self.lfwhm
+#         cp.valid[:] = self.valid
+#         cp.ntS = self.ntS
+#         return cp
 
 
 def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
@@ -1182,70 +1182,70 @@ def make_noise_image4_numpy(data1d, invGain, quad, rPixX, rPixY):
     return nData.astype(np.float32)
 
 
-def build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, kernel_vec, filter_x, filter_y, status):
-    result = {
-        'niS': niS, 'ntS': ntS,
-        'ctStamps': ctSa,
-        'ciStamps': ciSa,
-        'kernel_vec': kernel_vec,
-        'filter_x': filter_x,
-        'filter_y': filter_y,
-        'status': status,
-    }
-    if ctSa is not None:
-        result['ctSscnt'] = ctSa.sscnt
-        result['ctNss'] = ctSa.nss
-        result['ctX0'] = ctSa.x0
-        result['ctY0'] = ctSa.y0
-        result['ctX'] = ctSa.x
-        result['ctY'] = ctSa.y
-        result['ctXss'] = ctSa.xss
-        result['ctYss'] = ctSa.yss
-        result['ctVectors'] = ctSa.vectors
-        result['ctMat'] = ctSa.mat
-        result['ctScprod'] = ctSa.scprod
-        result['ctKrefArea'] = ctSa.krefArea
-        result['ctChi2'] = ctSa.chi2
-        result['ctNorm'] = ctSa.norm
-        result['ctDiff'] = ctSa.diff
-        result['ctSumVal'] = ctSa.sum_val
-        result['ctMeanVal'] = ctSa.mean_val
-        result['ctMedian'] = ctSa.median
-        result['ctMode'] = ctSa.mode
-        result['ctSd'] = ctSa.sd
-        result['ctFwhm'] = ctSa.fwhm
-        result['ctLfwhm'] = ctSa.lfwhm
-        result['ctValid'] = ctSa.valid
-        result['ctNKSStamps'] = ctSa.nKSStamps
-        result['ctNC'] = ctSa.nC
-        result['ctNVec'] = ctSa.nVec
-        result['ctFwSq'] = ctSa.fwSq
-    if ciSa is not None:
-        result['ciSscnt'] = ciSa.sscnt
-        result['ciNss'] = ciSa.nss
-        result['ciX0'] = ciSa.x0
-        result['ciY0'] = ciSa.y0
-        result['ciX'] = ciSa.x
-        result['ciY'] = ciSa.y
-        result['ciXss'] = ciSa.xss
-        result['ciYss'] = ciSa.yss
-        result['ciVectors'] = ciSa.vectors
-        result['ciMat'] = ciSa.mat
-        result['ciScprod'] = ciSa.scprod
-        result['ciKrefArea'] = ciSa.krefArea
-        result['ciChi2'] = ciSa.chi2
-        result['ciNorm'] = ciSa.norm
-        result['ciDiff'] = ciSa.diff
-        result['ciSumVal'] = ciSa.sum_val
-        result['ciMeanVal'] = ciSa.mean_val
-        result['ciMedian'] = ciSa.median
-        result['ciMode'] = ciSa.mode
-        result['ciSd'] = ciSa.sd
-        result['ciFwhm'] = ciSa.fwhm
-        result['ciLfwhm'] = ciSa.lfwhm
-        result['ciValid'] = ciSa.valid
-        result['ciNKSStamps'] = ciSa.nKSStamps
-        result['ciNC'] = ciSa.nC
-        result['ciNVec'] = ciSa.nVec
-        result['ciFwSq'] = ciSa.fwSq
-    return result
+# def build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, kernel_vec, filter_x, filter_y, status):
+#     result = {
+#         'niS': niS, 'ntS': ntS,
+#         'ctStamps': ctSa,
+#         'ciStamps': ciSa,
+#         'kernel_vec': kernel_vec,
+#         'filter_x': filter_x,
+#         'filter_y': filter_y,
+#         'status': status,
+#     }
+#     if ctSa is not None:
+#         result['ctSscnt'] = ctSa.sscnt
+#         result['ctNss'] = ctSa.nss
+#         result['ctX0'] = ctSa.x0
+#         result['ctY0'] = ctSa.y0
+#         result['ctX'] = ctSa.x
+#         result['ctY'] = ctSa.y
+#         result['ctXss'] = ctSa.xss
+#         result['ctYss'] = ctSa.yss
+#         result['ctVectors'] = ctSa.vectors
+#         result['ctMat'] = ctSa.mat
+#         result['ctScprod'] = ctSa.scprod
+#         result['ctKrefArea'] = ctSa.krefArea
+#         result['ctChi2'] = ctSa.chi2
+#         result['ctNorm'] = ctSa.norm
+#         result['ctDiff'] = ctSa.diff
+#         result['ctSumVal'] = ctSa.sum_val
+#         result['ctMeanVal'] = ctSa.mean_val
+#         result['ctMedian'] = ctSa.median
+#         result['ctMode'] = ctSa.mode
+#         result['ctSd'] = ctSa.sd
+#         result['ctFwhm'] = ctSa.fwhm
+#         result['ctLfwhm'] = ctSa.lfwhm
+#         result['ctValid'] = ctSa.valid
+#         result['ctNKSStamps'] = ctSa.nKSStamps
+#         result['ctNC'] = ctSa.nC
+#         result['ctNVec'] = ctSa.nVec
+#         result['ctFwSq'] = ctSa.fwSq
+#     if ciSa is not None:
+#         result['ciSscnt'] = ciSa.sscnt
+#         result['ciNss'] = ciSa.nss
+#         result['ciX0'] = ciSa.x0
+#         result['ciY0'] = ciSa.y0
+#         result['ciX'] = ciSa.x
+#         result['ciY'] = ciSa.y
+#         result['ciXss'] = ciSa.xss
+#         result['ciYss'] = ciSa.yss
+#         result['ciVectors'] = ciSa.vectors
+#         result['ciMat'] = ciSa.mat
+#         result['ciScprod'] = ciSa.scprod
+#         result['ciKrefArea'] = ciSa.krefArea
+#         result['ciChi2'] = ciSa.chi2
+#         result['ciNorm'] = ciSa.norm
+#         result['ciDiff'] = ciSa.diff
+#         result['ciSumVal'] = ciSa.sum_val
+#         result['ciMeanVal'] = ciSa.mean_val
+#         result['ciMedian'] = ciSa.median
+#         result['ciMode'] = ciSa.mode
+#         result['ciSd'] = ciSa.sd
+#         result['ciFwhm'] = ciSa.fwhm
+#         result['ciLfwhm'] = ciSa.lfwhm
+#         result['ciValid'] = ciSa.valid
+#         result['ciNKSStamps'] = ciSa.nKSStamps
+#         result['ciNC'] = ciSa.nC
+#         result['ciNVec'] = ciSa.nVec
+#         result['ciFwSq'] = ciSa.fwSq
+#     return result

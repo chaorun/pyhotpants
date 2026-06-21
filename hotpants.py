@@ -9,7 +9,7 @@ from .functions import (
     FLAG_BAD_PIXVAL, FLAG_SAT_PIXEL, FLAG_NEG_PIXEL, FLAG_SPREAD,
     FLAG_MASKED, FLAG_BORDER, FLAG_SUBREGION, FLAG_INVALID,
     BUILD_STAMP_FLAT_CACHE, LAST_SIGMA_CLIP, LAST_N, LAST_MEDIAN,
-    StampsArray, Ran1,
+    Ran1,
     sigma_clip_numpy, get_noise_stats3_numpy,
     insert_subregion_flt_numpy, insert_subregion_int_numpy,
     cut_stamp_numpy, get_stamp_stats3_numpy, bin_quartile_numpy,
@@ -18,7 +18,7 @@ from .functions import (
     quick_sort_impl, quick_sort_recurse,
     psfCentersJit, buildStampsNumba,
     lubksb_numpy, ludcmp_numpy,
-    make_noise_image4_numpy, build_stamps_flatten_helper,
+    make_noise_image4_numpy,
 )
 
 from .alard import (
@@ -248,109 +248,109 @@ FLAG_I_SKIP = 0x800
 FLAG_OUTPUT_ISBAD = 0x8000
 
 
-class StampsArray:
-    def __init__(self, nS, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC):
-        fwSq = fwKSStamp * fwKSStamp
-        nVec = nCompKer + nBGVectors
-
-        self.nS = nS
-        self.nKSStamps = nKSStamps
-        self.fwKSStamp = fwKSStamp
-        self.nCompKer = nCompKer
-        self.nBGVectors = nBGVectors
-        self.nC = nC
-        self.fwSq = fwSq
-        self.nVec = nVec
-
-        self.sscnt   = np.zeros(nS, dtype=np.int32)
-        self.nss     = np.zeros(nS, dtype=np.int32)
-        self.x0      = np.zeros(nS, dtype=np.int32)
-        self.y0      = np.zeros(nS, dtype=np.int32)
-        self.x       = np.zeros(nS, dtype=np.int32)
-        self.y       = np.zeros(nS, dtype=np.int32)
-
-        self.xss     = np.zeros((nS, nKSStamps), dtype=np.int32)
-        self.yss     = np.zeros((nS, nKSStamps), dtype=np.int32)
-
-        self.vectors  = np.zeros((nS, nVec, fwSq), dtype=np.float64)
-        self.mat      = np.zeros((nS, nC, nC), dtype=np.float64)
-        self.scprod   = np.zeros((nS, nC), dtype=np.float64)
-        self.krefArea = np.zeros((nS, fwSq), dtype=np.float64)
-
-        self.chi2    = np.zeros(nS, dtype=np.float64)
-        self.norm    = np.zeros(nS, dtype=np.float64)
-        self.diff    = np.zeros(nS, dtype=np.float64)
-        self.sum_val = np.zeros(nS, dtype=np.float64)
-        self.mean_val = np.zeros(nS, dtype=np.float64)
-        self.median  = np.zeros(nS, dtype=np.float64)
-        self.mode    = np.zeros(nS, dtype=np.float64)
-        self.sd      = np.zeros(nS, dtype=np.float64)
-        self.fwhm    = np.zeros(nS, dtype=np.float64)
-        self.lfwhm   = np.zeros(nS, dtype=np.float64)
-
-        self.valid   = np.zeros(nS, dtype=np.bool_)
-        self.ntS     = 0
-
-    @staticmethod
-    def subset(src, mask):
-        nSub = mask.sum()
-        if nSub == 0:
-            return None
-        sa = StampsArray(nSub, src.nKSStamps, src.fwKSStamp, src.nCompKer, src.nBGVectors, src.nC)
-        sa.sscnt[:]     = src.sscnt[mask]
-        sa.nss[:]       = src.nss[mask]
-        sa.x0[:]        = src.x0[mask]
-        sa.y0[:]        = src.y0[mask]
-        sa.x[:]         = src.x[mask]
-        sa.y[:]         = src.y[mask]
-        sa.xss[:]       = src.xss[mask]
-        sa.yss[:]       = src.yss[mask]
-        sa.vectors[:]   = src.vectors[mask]
-        sa.mat[:]       = src.mat[mask]
-        sa.scprod[:]    = src.scprod[mask]
-        sa.krefArea[:]  = src.krefArea[mask]
-        sa.chi2[:]      = src.chi2[mask]
-        sa.norm[:]      = src.norm[mask]
-        sa.diff[:]      = src.diff[mask]
-        sa.sum_val[:]   = src.sum_val[mask]
-        sa.mean_val[:]  = src.mean_val[mask]
-        sa.median[:]    = src.median[mask]
-        sa.mode[:]      = src.mode[mask]
-        sa.sd[:]        = src.sd[mask]
-        sa.fwhm[:]      = src.fwhm[mask]
-        sa.lfwhm[:]     = src.lfwhm[mask]
-        sa.valid[:]     = src.valid[mask]
-        sa.ntS          = nSub
-        return sa
-
-    def deepCopy(self):
-        """返回完整深拷贝"""
-        cp = StampsArray(self.nS, self.nKSStamps, self.fwKSStamp, self.nCompKer, self.nBGVectors, self.nC)
-        cp.sscnt[:] = self.sscnt
-        cp.nss[:] = self.nss
-        cp.x0[:] = self.x0
-        cp.y0[:] = self.y0
-        cp.x[:] = self.x
-        cp.y[:] = self.y
-        cp.xss[:] = self.xss
-        cp.yss[:] = self.yss
-        cp.vectors[:] = self.vectors
-        cp.mat[:] = self.mat
-        cp.scprod[:] = self.scprod
-        cp.krefArea[:] = self.krefArea
-        cp.chi2[:] = self.chi2
-        cp.norm[:] = self.norm
-        cp.diff[:] = self.diff
-        cp.sum_val[:] = self.sum_val
-        cp.mean_val[:] = self.mean_val
-        cp.median[:] = self.median
-        cp.mode[:] = self.mode
-        cp.sd[:] = self.sd
-        cp.fwhm[:] = self.fwhm
-        cp.lfwhm[:] = self.lfwhm
-        cp.valid[:] = self.valid
-        cp.ntS = self.ntS
-        return cp
+# class StampsArray:
+#     def __init__(self, nS, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC):
+#         fwSq = fwKSStamp * fwKSStamp
+#         nVec = nCompKer + nBGVectors
+#
+#         self.nS = nS
+#         self.nKSStamps = nKSStamps
+#         self.fwKSStamp = fwKSStamp
+#         self.nCompKer = nCompKer
+#         self.nBGVectors = nBGVectors
+#         self.nC = nC
+#         self.fwSq = fwSq
+#         self.nVec = nVec
+#
+#         self.sscnt   = np.zeros(nS, dtype=np.int32)
+#         self.nss     = np.zeros(nS, dtype=np.int32)
+#         self.x0      = np.zeros(nS, dtype=np.int32)
+#         self.y0      = np.zeros(nS, dtype=np.int32)
+#         self.x       = np.zeros(nS, dtype=np.int32)
+#         self.y       = np.zeros(nS, dtype=np.int32)
+#
+#         self.xss     = np.zeros((nS, nKSStamps), dtype=np.int32)
+#         self.yss     = np.zeros((nS, nKSStamps), dtype=np.int32)
+#
+#         self.vectors  = np.zeros((nS, nVec, fwSq), dtype=np.float64)
+#         self.mat      = np.zeros((nS, nC, nC), dtype=np.float64)
+#         self.scprod   = np.zeros((nS, nC), dtype=np.float64)
+#         self.krefArea = np.zeros((nS, fwSq), dtype=np.float64)
+#
+#         self.chi2    = np.zeros(nS, dtype=np.float64)
+#         self.norm    = np.zeros(nS, dtype=np.float64)
+#         self.diff    = np.zeros(nS, dtype=np.float64)
+#         self.sum_val = np.zeros(nS, dtype=np.float64)
+#         self.mean_val = np.zeros(nS, dtype=np.float64)
+#         self.median  = np.zeros(nS, dtype=np.float64)
+#         self.mode    = np.zeros(nS, dtype=np.float64)
+#         self.sd      = np.zeros(nS, dtype=np.float64)
+#         self.fwhm    = np.zeros(nS, dtype=np.float64)
+#         self.lfwhm   = np.zeros(nS, dtype=np.float64)
+#
+#         self.valid   = np.zeros(nS, dtype=np.bool_)
+#         self.ntS     = 0
+#
+#     @staticmethod
+#     def subset(src, mask):
+#         nSub = mask.sum()
+#         if nSub == 0:
+#             return None
+#         sa = StampsArray(nSub, src.nKSStamps, src.fwKSStamp, src.nCompKer, src.nBGVectors, src.nC)
+#         sa.sscnt[:]     = src.sscnt[mask]
+#         sa.nss[:]       = src.nss[mask]
+#         sa.x0[:]        = src.x0[mask]
+#         sa.y0[:]        = src.y0[mask]
+#         sa.x[:]         = src.x[mask]
+#         sa.y[:]         = src.y[mask]
+#         sa.xss[:]       = src.xss[mask]
+#         sa.yss[:]       = src.yss[mask]
+#         sa.vectors[:]   = src.vectors[mask]
+#         sa.mat[:]       = src.mat[mask]
+#         sa.scprod[:]    = src.scprod[mask]
+#         sa.krefArea[:]  = src.krefArea[mask]
+#         sa.chi2[:]      = src.chi2[mask]
+#         sa.norm[:]      = src.norm[mask]
+#         sa.diff[:]      = src.diff[mask]
+#         sa.sum_val[:]   = src.sum_val[mask]
+#         sa.mean_val[:]  = src.mean_val[mask]
+#         sa.median[:]    = src.median[mask]
+#         sa.mode[:]      = src.mode[mask]
+#         sa.sd[:]        = src.sd[mask]
+#         sa.fwhm[:]      = src.fwhm[mask]
+#         sa.lfwhm[:]     = src.lfwhm[mask]
+#         sa.valid[:]     = src.valid[mask]
+#         sa.ntS          = nSub
+#         return sa
+#
+#     def deepCopy(self):
+#         """返回完整深拷贝"""
+#         cp = StampsArray(self.nS, self.nKSStamps, self.fwKSStamp, self.nCompKer, self.nBGVectors, self.nC)
+#         cp.sscnt[:] = self.sscnt
+#         cp.nss[:] = self.nss
+#         cp.x0[:] = self.x0
+#         cp.y0[:] = self.y0
+#         cp.x[:] = self.x
+#         cp.y[:] = self.y
+#         cp.xss[:] = self.xss
+#         cp.yss[:] = self.yss
+#         cp.vectors[:] = self.vectors
+#         cp.mat[:] = self.mat
+#         cp.scprod[:] = self.scprod
+#         cp.krefArea[:] = self.krefArea
+#         cp.chi2[:] = self.chi2
+#         cp.norm[:] = self.norm
+#         cp.diff[:] = self.diff
+#         cp.sum_val[:] = self.sum_val
+#         cp.mean_val[:] = self.mean_val
+#         cp.median[:] = self.median
+#         cp.mode[:] = self.mode
+#         cp.sd[:] = self.sd
+#         cp.fwhm[:] = self.fwhm
+#         cp.lfwhm[:] = self.lfwhm
+#         cp.valid[:] = self.valid
+#         cp.ntS = self.ntS
+#         return cp
 
 
 def sigma_clip_numpy(data, maxiter=10, stat_sig=3.0):
@@ -4796,21 +4796,21 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
 
     wxy = np.zeros((nS, ncomp2), dtype=np.float64)
 
-    # 从 sa 提取扁平数组（用于后续扁平化的函数调用）
-    saMat      = sa.mat
-    saVectors  = sa.vectors
-    saSscnt    = sa.sscnt
-    saNss      = sa.nss
-    saXss      = sa.xss
-    saYss      = sa.yss
-    saScprod   = sa.scprod
-    saKrefArea = sa.krefArea
-    saSumVal   = sa.sum_val
-    saX0       = sa.x0
-    saY0       = sa.y0
-    saChi2     = sa.chi2
-    nC         = sa.nC
-    nKSStamps  = sa.nKSStamps
+    # 从 sa dict 提取扁平数组（用于后续扁平化的函数调用）
+    saMat      = sa['mat']
+    saVectors  = sa['vectors']
+    saSscnt    = sa['sscnt']
+    saNss      = sa['nss']
+    saXss      = sa['xss']
+    saYss      = sa['yss']
+    saScprod   = sa['scprod']
+    saKrefArea = sa['krefArea']
+    saSumVal   = sa['sum_val']
+    saX0       = sa['x0']
+    saY0       = sa['y0']
+    saChi2     = sa['chi2']
+    nC         = sa['nC']
+    nKSStamps  = sa['nKSStamps']
 
     def do_fill(indices):
         for idx in indices:
@@ -4977,74 +4977,74 @@ def make_noise_image4_numpy(data1d, invGain, quad, rPixX, rPixY):
     return nData.astype(np.float32)
 
 
-def build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, kernel_vec, filter_x, filter_y, status):
-    """将 StampsArray 对象的字段展开为扁平 numpy 数组，与原有对象一起放入 dict"""
-    result = {
-        'niS': niS, 'ntS': ntS,
-        'ctStamps': ctSa,
-        'ciStamps': ciSa,
-        'kernel_vec': kernel_vec,
-        'filter_x': filter_x,
-        'filter_y': filter_y,
-        'status': status,
-    }
-    if ctSa is not None:
-        result['ctSscnt'] = ctSa.sscnt
-        result['ctNss'] = ctSa.nss
-        result['ctX0'] = ctSa.x0
-        result['ctY0'] = ctSa.y0
-        result['ctX'] = ctSa.x
-        result['ctY'] = ctSa.y
-        result['ctXss'] = ctSa.xss
-        result['ctYss'] = ctSa.yss
-        result['ctVectors'] = ctSa.vectors
-        result['ctMat'] = ctSa.mat
-        result['ctScprod'] = ctSa.scprod
-        result['ctKrefArea'] = ctSa.krefArea
-        result['ctChi2'] = ctSa.chi2
-        result['ctNorm'] = ctSa.norm
-        result['ctDiff'] = ctSa.diff
-        result['ctSumVal'] = ctSa.sum_val
-        result['ctMeanVal'] = ctSa.mean_val
-        result['ctMedian'] = ctSa.median
-        result['ctMode'] = ctSa.mode
-        result['ctSd'] = ctSa.sd
-        result['ctFwhm'] = ctSa.fwhm
-        result['ctLfwhm'] = ctSa.lfwhm
-        result['ctValid'] = ctSa.valid
-        result['ctNKSStamps'] = ctSa.nKSStamps
-        result['ctNC'] = ctSa.nC
-        result['ctNVec'] = ctSa.nVec
-        result['ctFwSq'] = ctSa.fwSq
-    if ciSa is not None:
-        result['ciSscnt'] = ciSa.sscnt
-        result['ciNss'] = ciSa.nss
-        result['ciX0'] = ciSa.x0
-        result['ciY0'] = ciSa.y0
-        result['ciX'] = ciSa.x
-        result['ciY'] = ciSa.y
-        result['ciXss'] = ciSa.xss
-        result['ciYss'] = ciSa.yss
-        result['ciVectors'] = ciSa.vectors
-        result['ciMat'] = ciSa.mat
-        result['ciScprod'] = ciSa.scprod
-        result['ciKrefArea'] = ciSa.krefArea
-        result['ciChi2'] = ciSa.chi2
-        result['ciNorm'] = ciSa.norm
-        result['ciDiff'] = ciSa.diff
-        result['ciSumVal'] = ciSa.sum_val
-        result['ciMeanVal'] = ciSa.mean_val
-        result['ciMedian'] = ciSa.median
-        result['ciMode'] = ciSa.mode
-        result['ciSd'] = ciSa.sd
-        result['ciFwhm'] = ciSa.fwhm
-        result['ciLfwhm'] = ciSa.lfwhm
-        result['ciValid'] = ciSa.valid
-        result['ciNKSStamps'] = ciSa.nKSStamps
-        result['ciNC'] = ciSa.nC
-        result['ciNVec'] = ciSa.nVec
-        result['ciFwSq'] = ciSa.fwSq
-    return result
+# def build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, kernel_vec, filter_x, filter_y, status):
+#     """将 StampsArray 对象的字段展开为扁平 numpy 数组，与原有对象一起放入 dict"""
+#     result = {
+#         'niS': niS, 'ntS': ntS,
+#         'ctStamps': ctSa,
+#         'ciStamps': ciSa,
+#         'kernel_vec': kernel_vec,
+#         'filter_x': filter_x,
+#         'filter_y': filter_y,
+#         'status': status,
+#     }
+#     if ctSa is not None:
+#         result['ctSscnt'] = ctSa.sscnt
+#         result['ctNss'] = ctSa.nss
+#         result['ctX0'] = ctSa.x0
+#         result['ctY0'] = ctSa.y0
+#         result['ctX'] = ctSa.x
+#         result['ctY'] = ctSa.y
+#         result['ctXss'] = ctSa.xss
+#         result['ctYss'] = ctSa.yss
+#         result['ctVectors'] = ctSa.vectors
+#         result['ctMat'] = ctSa.mat
+#         result['ctScprod'] = ctSa.scprod
+#         result['ctKrefArea'] = ctSa.krefArea
+#         result['ctChi2'] = ctSa.chi2
+#         result['ctNorm'] = ctSa.norm
+#         result['ctDiff'] = ctSa.diff
+#         result['ctSumVal'] = ctSa.sum_val
+#         result['ctMeanVal'] = ctSa.mean_val
+#         result['ctMedian'] = ctSa.median
+#         result['ctMode'] = ctSa.mode
+#         result['ctSd'] = ctSa.sd
+#         result['ctFwhm'] = ctSa.fwhm
+#         result['ctLfwhm'] = ctSa.lfwhm
+#         result['ctValid'] = ctSa.valid
+#         result['ctNKSStamps'] = ctSa.nKSStamps
+#         result['ctNC'] = ctSa.nC
+#         result['ctNVec'] = ctSa.nVec
+#         result['ctFwSq'] = ctSa.fwSq
+#     if ciSa is not None:
+#         result['ciSscnt'] = ciSa.sscnt
+#         result['ciNss'] = ciSa.nss
+#         result['ciX0'] = ciSa.x0
+#         result['ciY0'] = ciSa.y0
+#         result['ciX'] = ciSa.x
+#         result['ciY'] = ciSa.y
+#         result['ciXss'] = ciSa.xss
+#         result['ciYss'] = ciSa.yss
+#         result['ciVectors'] = ciSa.vectors
+#         result['ciMat'] = ciSa.mat
+#         result['ciScprod'] = ciSa.scprod
+#         result['ciKrefArea'] = ciSa.krefArea
+#         result['ciChi2'] = ciSa.chi2
+#         result['ciNorm'] = ciSa.norm
+#         result['ciDiff'] = ciSa.diff
+#         result['ciSumVal'] = ciSa.sum_val
+#         result['ciMeanVal'] = ciSa.mean_val
+#         result['ciMedian'] = ciSa.median
+#         result['ciMode'] = ciSa.mode
+#         result['ciSd'] = ciSa.sd
+#         result['ciFwhm'] = ciSa.fwhm
+#         result['ciLfwhm'] = ciSa.lfwhm
+#         result['ciValid'] = ciSa.valid
+#         result['ciNKSStamps'] = ciSa.nKSStamps
+#         result['ciNC'] = ciSa.nC
+#         result['ciNVec'] = ciSa.nVec
+#         result['ciFwSq'] = ciSa.fwSq
+#     return result
 
 def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConvolve):
     import sys
@@ -5112,17 +5112,85 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
         if localForceConvolve != "i":
             # ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
             #             for _ in range(nStamps)]
-            ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+            # ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+            ct = {}  # template stamps flat arrays dict
+            nVec = nCompKer + nBGVectors
+            fwSq = fwKSStamp * fwKSStamp
+            ct['nss'] = np.zeros(nStamps, dtype=np.int32)
+            ct['sscnt'] = np.zeros(nStamps, dtype=np.int32)
+            ct['x0'] = np.zeros(nStamps, dtype=np.int32)
+            ct['y0'] = np.zeros(nStamps, dtype=np.int32)
+            ct['x'] = np.zeros(nStamps, dtype=np.int32)
+            ct['y'] = np.zeros(nStamps, dtype=np.int32)
+            ct['xss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+            ct['yss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+            ct['vectors'] = np.zeros((nStamps, nVec, fwSq), dtype=np.float64)
+            ct['mat'] = np.zeros((nStamps, nC, nC), dtype=np.float64)
+            ct['scprod'] = np.zeros((nStamps, nC), dtype=np.float64)
+            ct['krefArea'] = np.zeros((nStamps, fwSq), dtype=np.float64)
+            ct['chi2'] = np.zeros(nStamps, dtype=np.float64)
+            ct['norm'] = np.zeros(nStamps, dtype=np.float64)
+            ct['diff'] = np.zeros(nStamps, dtype=np.float64)
+            ct['sum_val'] = np.zeros(nStamps, dtype=np.float64)
+            ct['mean_val'] = np.zeros(nStamps, dtype=np.float64)
+            ct['median'] = np.zeros(nStamps, dtype=np.float64)
+            ct['mode'] = np.zeros(nStamps, dtype=np.float64)
+            ct['sd'] = np.zeros(nStamps, dtype=np.float64)
+            ct['fwhm'] = np.zeros(nStamps, dtype=np.float64)
+            ct['lfwhm'] = np.zeros(nStamps, dtype=np.float64)
+            ct['valid'] = np.zeros(nStamps, dtype=np.bool_)
+            ct['nKSStamps'] = nKSStamps
+            ct['fwKSStamp'] = fwKSStamp
+            ct['nCompKer'] = nCompKer
+            ct['nBGVectors'] = nBGVectors
+            ct['nC'] = nC
+            ct['fwSq'] = fwSq
+            ct['nVec'] = nVec
+            ctSa = ct
         if localForceConvolve != "t":
             # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
             #             for _ in range(nStamps)]
-            ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+            # ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+            ci = {}  # image stamps flat arrays dict
+            nVec = nCompKer + nBGVectors
+            fwSq = fwKSStamp * fwKSStamp
+            ci['nss'] = np.zeros(nStamps, dtype=np.int32)
+            ci['sscnt'] = np.zeros(nStamps, dtype=np.int32)
+            ci['x0'] = np.zeros(nStamps, dtype=np.int32)
+            ci['y0'] = np.zeros(nStamps, dtype=np.int32)
+            ci['x'] = np.zeros(nStamps, dtype=np.int32)
+            ci['y'] = np.zeros(nStamps, dtype=np.int32)
+            ci['xss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+            ci['yss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+            ci['vectors'] = np.zeros((nStamps, nVec, fwSq), dtype=np.float64)
+            ci['mat'] = np.zeros((nStamps, nC, nC), dtype=np.float64)
+            ci['scprod'] = np.zeros((nStamps, nC), dtype=np.float64)
+            ci['krefArea'] = np.zeros((nStamps, fwSq), dtype=np.float64)
+            ci['chi2'] = np.zeros(nStamps, dtype=np.float64)
+            ci['norm'] = np.zeros(nStamps, dtype=np.float64)
+            ci['diff'] = np.zeros(nStamps, dtype=np.float64)
+            ci['sum_val'] = np.zeros(nStamps, dtype=np.float64)
+            ci['mean_val'] = np.zeros(nStamps, dtype=np.float64)
+            ci['median'] = np.zeros(nStamps, dtype=np.float64)
+            ci['mode'] = np.zeros(nStamps, dtype=np.float64)
+            ci['sd'] = np.zeros(nStamps, dtype=np.float64)
+            ci['fwhm'] = np.zeros(nStamps, dtype=np.float64)
+            ci['lfwhm'] = np.zeros(nStamps, dtype=np.float64)
+            ci['valid'] = np.zeros(nStamps, dtype=np.bool_)
+            ci['nKSStamps'] = nKSStamps
+            ci['fwKSStamp'] = fwKSStamp
+            ci['nCompKer'] = nCompKer
+            ci['nBGVectors'] = nBGVectors
+            ci['nC'] = nC
+            ci['fwSq'] = fwSq
+            ci['nVec'] = nVec
+            ciSa = ci
 
         # None-safe 辅助变量：当 forceConvolve=="t" 时 ciSa 为 None，forceConvolve=="i" 时 ctSa 为 None
         if ctSa is not None:
-            ctNss = ctSa.nss; ctX0 = ctSa.x0; ctY0 = ctSa.y0; ctX = ctSa.x; ctY = ctSa.y
-            ctSumVal = ctSa.sum_val; ctMeanVal = ctSa.mean_val; ctMedian = ctSa.median; ctMode = ctSa.mode
-            ctSd = ctSa.sd; ctFwhm = ctSa.fwhm; ctLfwhm = ctSa.lfwhm; ctXss = ctSa.xss; ctYss = ctSa.yss; ctSscnt = ctSa.sscnt
+            ctNss = ctSa['nss']; ctX0 = ctSa['x0']; ctY0 = ctSa['y0']; ctX = ctSa['x']; ctY = ctSa['y']
+            ctSumVal = ctSa['sum_val']; ctMeanVal = ctSa['mean_val']; ctMedian = ctSa['median']; ctMode = ctSa['mode']
+            ctSd = ctSa['sd']; ctFwhm = ctSa['fwhm']; ctLfwhm = ctSa['lfwhm']; ctXss = ctSa['xss']; ctYss = ctSa['yss']; ctSscnt = ctSa['sscnt']
         else:
             ctNss = np.zeros(1, dtype=np.int32); ctX0 = np.zeros(1, dtype=np.int32); ctY0 = np.zeros(1, dtype=np.int32)
             ctX = np.zeros(1, dtype=np.int32); ctY = np.zeros(1, dtype=np.int32)
@@ -5131,9 +5199,9 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             ctLfwhm = np.zeros(1, dtype=np.float64); ctXss = np.zeros((1, 1), dtype=np.int32); ctYss = np.zeros((1, 1), dtype=np.int32)
             ctSscnt = np.zeros(1, dtype=np.int32)
         if ciSa is not None:
-            ciNss = ciSa.nss; ciX0 = ciSa.x0; ciY0 = ciSa.y0; ciX = ciSa.x; ciY = ciSa.y
-            ciSumVal = ciSa.sum_val; ciMeanVal = ciSa.mean_val; ciMedian = ciSa.median; ciMode = ciSa.mode
-            ciSd = ciSa.sd; ciFwhm = ciSa.fwhm; ciLfwhm = ciSa.lfwhm; ciXss = ciSa.xss; ciYss = ciSa.yss; ciSscnt = ciSa.sscnt
+            ciNss = ciSa['nss']; ciX0 = ciSa['x0']; ciY0 = ciSa['y0']; ciX = ciSa['x']; ciY = ciSa['y']
+            ciSumVal = ciSa['sum_val']; ciMeanVal = ciSa['mean_val']; ciMedian = ciSa['median']; ciMode = ciSa['mode']
+            ciSd = ciSa['sd']; ciFwhm = ciSa['fwhm']; ciLfwhm = ciSa['lfwhm']; ciXss = ciSa['xss']; ciYss = ciSa['yss']; ciSscnt = ciSa['sscnt']
         else:
             ciNss = np.zeros(1, dtype=np.int32); ciX0 = np.zeros(1, dtype=np.int32); ciY0 = np.zeros(1, dtype=np.int32)
             ciX = np.zeros(1, dtype=np.int32); ciY = np.zeros(1, dtype=np.int32)
@@ -5153,18 +5221,18 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
                 if localForceConvolve != "i":
                     # ctStamps[ntS]['sscnt'] = 0
-                    ctSa.sscnt[ntS] = 0
+                    ctSa['sscnt'][ntS] = 0
                     # ctStamps[ntS]['nss'] = 0
-                    ctSa.nss[ntS] = 0
+                    ctSa['nss'][ntS] = 0
                     # ctStamps[ntS]['chi2'] = 0.0
-                    ctSa.chi2[ntS] = 0.0
+                    ctSa['chi2'][ntS] = 0.0
                 if localForceConvolve != "t":
                     # ciStamps[niS]['sscnt'] = 0
-                    ciSa.sscnt[niS] = 0
+                    ciSa['sscnt'][niS] = 0
                     # ciStamps[niS]['nss'] = 0
-                    ciSa.nss[niS] = 0
+                    ciSa['nss'][niS] = 0
                     # ciStamps[niS]['chi2'] = 0.0
-                    ciSa.chi2[niS] = 0.0
+                    ciSa['chi2'][niS] = 0.0
 
                 if xcmp is not None and Ncmp > 0:
                     if verbose >= 2:
@@ -5464,16 +5532,16 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 if localForceConvolve != "i":
                     if verbose >= 2:
                         # sys.stderr.write("    templ: %d substamps\n" % ctStamps[ntS]['nss'])
-                        sys.stderr.write("    templ: %d substamps\n" % ctSa.nss[ntS])
+                        sys.stderr.write("    templ: %d substamps\n" % ctSa['nss'][ntS])
                     # if ctStamps[ntS]['nss'] > 0:
-                    if ctSa.nss[ntS] > 0:
+                    if ctSa['nss'][ntS] > 0:
                         ntS += 1
                 if localForceConvolve != "t":
                     if verbose >= 2:
                         # sys.stderr.write("    image: %d substamps\n" % ciStamps[niS]['nss'])
-                        sys.stderr.write("    image: %d substamps\n" % ciSa.nss[niS])
+                        sys.stderr.write("    image: %d substamps\n" % ciSa['nss'][niS])
                     # if ciStamps[niS]['nss'] > 0:
-                    if ciSa.nss[niS] > 0:
+                    if ciSa['nss'][niS] > 0:
                         niS += 1
 
         iSFrac = niS / float(nStamps)
@@ -5501,11 +5569,79 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             if localForceConvolve != "i":
                 # ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
                 #             for _ in range(nStamps)]
-                ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                # ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                nVec = nCompKer + nBGVectors
+                fwSq = fwKSStamp * fwKSStamp
+                ct = {}
+                ct['nss'] = np.zeros(nStamps, dtype=np.int32)
+                ct['sscnt'] = np.zeros(nStamps, dtype=np.int32)
+                ct['x0'] = np.zeros(nStamps, dtype=np.int32)
+                ct['y0'] = np.zeros(nStamps, dtype=np.int32)
+                ct['x'] = np.zeros(nStamps, dtype=np.int32)
+                ct['y'] = np.zeros(nStamps, dtype=np.int32)
+                ct['xss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+                ct['yss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+                ct['vectors'] = np.zeros((nStamps, nVec, fwSq), dtype=np.float64)
+                ct['mat'] = np.zeros((nStamps, nC, nC), dtype=np.float64)
+                ct['scprod'] = np.zeros((nStamps, nC), dtype=np.float64)
+                ct['krefArea'] = np.zeros((nStamps, fwSq), dtype=np.float64)
+                ct['chi2'] = np.zeros(nStamps, dtype=np.float64)
+                ct['norm'] = np.zeros(nStamps, dtype=np.float64)
+                ct['diff'] = np.zeros(nStamps, dtype=np.float64)
+                ct['sum_val'] = np.zeros(nStamps, dtype=np.float64)
+                ct['mean_val'] = np.zeros(nStamps, dtype=np.float64)
+                ct['median'] = np.zeros(nStamps, dtype=np.float64)
+                ct['mode'] = np.zeros(nStamps, dtype=np.float64)
+                ct['sd'] = np.zeros(nStamps, dtype=np.float64)
+                ct['fwhm'] = np.zeros(nStamps, dtype=np.float64)
+                ct['lfwhm'] = np.zeros(nStamps, dtype=np.float64)
+                ct['valid'] = np.zeros(nStamps, dtype=np.bool_)
+                ct['nKSStamps'] = nKSStamps
+                ct['fwKSStamp'] = fwKSStamp
+                ct['nCompKer'] = nCompKer
+                ct['nBGVectors'] = nBGVectors
+                ct['nC'] = nC
+                ct['fwSq'] = fwSq
+                ct['nVec'] = nVec
+                ctSa = ct
             if localForceConvolve != "t":
                 # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
                 #             for _ in range(nStamps)]
-                ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                # ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+                nVec = nCompKer + nBGVectors
+                fwSq = fwKSStamp * fwKSStamp
+                ci = {}
+                ci['nss'] = np.zeros(nStamps, dtype=np.int32)
+                ci['sscnt'] = np.zeros(nStamps, dtype=np.int32)
+                ci['x0'] = np.zeros(nStamps, dtype=np.int32)
+                ci['y0'] = np.zeros(nStamps, dtype=np.int32)
+                ci['x'] = np.zeros(nStamps, dtype=np.int32)
+                ci['y'] = np.zeros(nStamps, dtype=np.int32)
+                ci['xss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+                ci['yss'] = np.zeros((nStamps, nKSStamps), dtype=np.int32)
+                ci['vectors'] = np.zeros((nStamps, nVec, fwSq), dtype=np.float64)
+                ci['mat'] = np.zeros((nStamps, nC, nC), dtype=np.float64)
+                ci['scprod'] = np.zeros((nStamps, nC), dtype=np.float64)
+                ci['krefArea'] = np.zeros((nStamps, fwSq), dtype=np.float64)
+                ci['chi2'] = np.zeros(nStamps, dtype=np.float64)
+                ci['norm'] = np.zeros(nStamps, dtype=np.float64)
+                ci['diff'] = np.zeros(nStamps, dtype=np.float64)
+                ci['sum_val'] = np.zeros(nStamps, dtype=np.float64)
+                ci['mean_val'] = np.zeros(nStamps, dtype=np.float64)
+                ci['median'] = np.zeros(nStamps, dtype=np.float64)
+                ci['mode'] = np.zeros(nStamps, dtype=np.float64)
+                ci['sd'] = np.zeros(nStamps, dtype=np.float64)
+                ci['fwhm'] = np.zeros(nStamps, dtype=np.float64)
+                ci['lfwhm'] = np.zeros(nStamps, dtype=np.float64)
+                ci['valid'] = np.zeros(nStamps, dtype=np.bool_)
+                ci['nKSStamps'] = nKSStamps
+                ci['fwKSStamp'] = fwKSStamp
+                ci['nCompKer'] = nCompKer
+                ci['nBGVectors'] = nBGVectors
+                ci['nC'] = nC
+                ci['fwSq'] = fwSq
+                ci['nVec'] = nVec
+                ciSa = ci
 
             mRData1d[:] = mRData1d & ~0xa00
 
@@ -5514,26 +5650,47 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
     if (niS == 0) and (ntS == 0):
         # return {'niS': 0, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
         #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
-        result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, -1)
+        # result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, -1)
+        result = {
+            'niS': niS, 'ntS': ntS,
+            'ctStamps': ctSa,
+            'ciStamps': ciSa,
+            'kernel_vec': None,
+            'filter_x': None,
+            'filter_y': None,
+            'status': -1,
+        }
         return result
-        # return {'niS': 0, 'ntS': 0, 'ctStamps': ctSa, 'ciStamps': ciSa,
-        #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
     if localForceConvolve == "i":
         if niS == 0:
             # return {'niS': 0, 'ntS': ntS, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
             #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
-            result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, -1)
+            # result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, -1)
+            result = {
+                'niS': niS, 'ntS': ntS,
+                'ctStamps': ctSa,
+                'ciStamps': ciSa,
+                'kernel_vec': None,
+                'filter_x': None,
+                'filter_y': None,
+                'status': -1,
+            }
             return result
-            # return {'niS': 0, 'ntS': ntS, 'ctStamps': ctSa, 'ciStamps': ciSa,
-            #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
     if localForceConvolve == "t":
         if ntS == 0:
             # return {'niS': niS, 'ntS': 0, 'ctStamps': ctStamps, 'ciStamps': ciStamps,
             #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
-            result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, -1)
+            # result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, -1)
+            result = {
+                'niS': niS, 'ntS': ntS,
+                'ctStamps': ctSa,
+                'ciStamps': ciSa,
+                'kernel_vec': None,
+                'filter_x': None,
+                'filter_y': None,
+                'status': -1,
+            }
             return result
-            # return {'niS': niS, 'ntS': 0, 'ctStamps': ctSa, 'ciStamps': ciSa,
-            #         'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
 
     filter_x = np.zeros(fwKernel * nCompKer, dtype=np.float64)
     filter_y = np.zeros(fwKernel * nCompKer, dtype=np.float64)
@@ -5541,7 +5698,16 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                                       sigma_gauss, filter_x, filter_y, PCA)
 
     logger.debug("region_buildstamps_numpy done")
-    result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, kernel_vec, filter_x, filter_y, 0)
+    # result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, kernel_vec, filter_x, filter_y, 0)
+    result = {
+        'niS': niS, 'ntS': ntS,
+        'ctStamps': ctSa,
+        'ciStamps': ciSa,
+        'kernel_vec': kernel_vec,
+        'filter_x': filter_x,
+        'filter_y': filter_y,
+        'status': 0,
+    }
     return result
     # return {
     #     'niS': niS, 'ntS': ntS,
@@ -5601,37 +5767,37 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     kernel_vec = buildstamps_result['kernel_vec']
     filter_x = buildstamps_result['filter_x']
     filter_y = buildstamps_result['filter_y']
-    # 扁平数组字段（从 bs_result 读取，与 ctSa/ciSa 内部数组引用相同）
-    ctSscnt = buildstamps_result.get('ctSscnt')
-    ctNss = buildstamps_result.get('ctNss')
-    ctVectors = buildstamps_result.get('ctVectors')
-    ctMat = buildstamps_result.get('ctMat')
-    ctScprod = buildstamps_result.get('ctScprod')
-    ctXss = buildstamps_result.get('ctXss')
-    ctYss = buildstamps_result.get('ctYss')
-    ctKrefArea = buildstamps_result.get('ctKrefArea')
-    ctSumVal = buildstamps_result.get('ctSumVal')
-    ctX0 = buildstamps_result.get('ctX0')
-    ctY0 = buildstamps_result.get('ctY0')
-    ctNorm = buildstamps_result.get('ctNorm')
-    ctDiff = buildstamps_result.get('ctDiff')
-    ctNKSStamps = buildstamps_result.get('ctNKSStamps', params_info.get('nKSStamps'))
-    ctNC = buildstamps_result.get('ctNC', ctx_info.get('nC'))
-    ciSscnt = buildstamps_result.get('ciSscnt')
-    ciNss = buildstamps_result.get('ciNss')
-    ciVectors = buildstamps_result.get('ciVectors')
-    ciMat = buildstamps_result.get('ciMat')
-    ciScprod = buildstamps_result.get('ciScprod')
-    ciXss = buildstamps_result.get('ciXss')
-    ciYss = buildstamps_result.get('ciYss')
-    ciKrefArea = buildstamps_result.get('ciKrefArea')
-    ciSumVal = buildstamps_result.get('ciSumVal')
-    ciX0 = buildstamps_result.get('ciX0')
-    ciY0 = buildstamps_result.get('ciY0')
-    ciNorm = buildstamps_result.get('ciNorm')
-    ciDiff = buildstamps_result.get('ciDiff')
-    ciNKSStamps = buildstamps_result.get('ciNKSStamps', params_info.get('nKSStamps'))
-    ciNC = buildstamps_result.get('ciNC', ctx_info.get('nC'))
+    # 扁平数组字段（从 ctSa/ciSa dict 读取，替代原来 build_stamps_flatten_helper 展开的字段）
+    ctSscnt = ctSa['sscnt'] if ctSa is not None else None
+    ctNss = ctSa['nss'] if ctSa is not None else None
+    ctVectors = ctSa['vectors'] if ctSa is not None else None
+    ctMat = ctSa['mat'] if ctSa is not None else None
+    ctScprod = ctSa['scprod'] if ctSa is not None else None
+    ctXss = ctSa['xss'] if ctSa is not None else None
+    ctYss = ctSa['yss'] if ctSa is not None else None
+    ctKrefArea = ctSa['krefArea'] if ctSa is not None else None
+    ctSumVal = ctSa['sum_val'] if ctSa is not None else None
+    ctX0 = ctSa['x0'] if ctSa is not None else None
+    ctY0 = ctSa['y0'] if ctSa is not None else None
+    ctNorm = ctSa['norm'] if ctSa is not None else None
+    ctDiff = ctSa['diff'] if ctSa is not None else None
+    ctNKSStamps = ctSa['nKSStamps'] if ctSa is not None else params_info.get('nKSStamps')
+    ctNC = ctSa['nC'] if ctSa is not None else ctx_info.get('nC')
+    ciSscnt = ciSa['sscnt'] if ciSa is not None else None
+    ciNss = ciSa['nss'] if ciSa is not None else None
+    ciVectors = ciSa['vectors'] if ciSa is not None else None
+    ciMat = ciSa['mat'] if ciSa is not None else None
+    ciScprod = ciSa['scprod'] if ciSa is not None else None
+    ciXss = ciSa['xss'] if ciSa is not None else None
+    ciYss = ciSa['yss'] if ciSa is not None else None
+    ciKrefArea = ciSa['krefArea'] if ciSa is not None else None
+    ciSumVal = ciSa['sum_val'] if ciSa is not None else None
+    ciX0 = ciSa['x0'] if ciSa is not None else None
+    ciY0 = ciSa['y0'] if ciSa is not None else None
+    ciNorm = ciSa['norm'] if ciSa is not None else None
+    ciDiff = ciSa['diff'] if ciSa is not None else None
+    ciNKSStamps = ciSa['nKSStamps'] if ciSa is not None else params_info.get('nKSStamps')
+    ciNC = ciSa['nC'] if ciSa is not None else ctx_info.get('nC')
 
     tMerit = 0.0
     iMerit = 0.0
@@ -5641,7 +5807,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     if localForceConvolve != "i":
         for k in range(ntS):
             # ctStamps[k]['sscnt'] = 0
-            ctSa.sscnt[k] = 0
+            ctSa['sscnt'][k] = 0
             # fill_stamp_numpy(ctStamps[k], tRData1d, iRData1d,
             #                  rPixX, rPixY, verbose, ngauss, deg_fixe,
             #                  hwKSStamp, fwKSStamp, hwKernel, fwKernel,
@@ -5682,7 +5848,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     if localForceConvolve != "t":
         for k in range(niS):
             # ciStamps[k]['sscnt'] = 0
-            ciSa.sscnt[k] = 0
+            ciSa['sscnt'][k] = 0
             # fill_stamp_numpy(ciStamps[k], iRData1d, tRData1d,
             #                  rPixX, rPixY, verbose, ngauss, deg_fixe,
             #                  hwKSStamp, fwKSStamp, hwKernel, fwKernel,
@@ -5726,7 +5892,16 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
         convTmpl = 0
 
     logger.debug("region_fit_numpy done, convTmpl=%s", convTmpl)
-    result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, 0)
+    # result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, 0)
+    result = {
+        'niS': niS, 'ntS': ntS,
+        'ctStamps': ctSa,
+        'ciStamps': ciSa,
+        'kernel_vec': None,
+        'filter_x': None,
+        'filter_y': None,
+        'status': 0,
+    }
     result['convTmpl'] = convTmpl
     result['tMerit'] = tMerit
     result['iMerit'] = iMerit
@@ -5803,15 +5978,15 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
     ctSa = fit_result.get('ctStamps')
     # ciStamps = fit_result['ciStamps']
     ciSa = fit_result.get('ciStamps')
-    # 扁平数组字段（从 fit_result 读取）
-    ctSscnt = fit_result.get('ctSscnt')
-    ctNss = fit_result.get('ctNss')
-    ctXss = fit_result.get('ctXss')
-    ctYss = fit_result.get('ctYss')
-    ciSscnt = fit_result.get('ciSscnt')
-    ciNss = fit_result.get('ciNss')
-    ciXss = fit_result.get('ciXss')
-    ciYss = fit_result.get('ciYss')
+    # 扁平数组字段（从 ctSa/ciSa dict 读取）
+    ctSscnt = ctSa['sscnt'] if ctSa is not None else None
+    ctNss = ctSa['nss'] if ctSa is not None else None
+    ctXss = ctSa['xss'] if ctSa is not None else None
+    ctYss = ctSa['yss'] if ctSa is not None else None
+    ciSscnt = ciSa['sscnt'] if ciSa is not None else None
+    ciNss = ciSa['nss'] if ciSa is not None else None
+    ciXss = ciSa['xss'] if ciSa is not None else None
+    ciYss = ciSa['yss'] if ciSa is not None else None
 
     ntS = buildstamps_result['ntS']
     niS = buildstamps_result['niS']
@@ -5995,18 +6170,18 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         if savexyflag:
             for si in range(ntS):
                 # for sc in range(ctStamps[si]['nss']):
-                for sc in range(ctSa.nss[si]):
+                for sc in range(ctSa['nss'][si]):
                     entry = {
                         # 'x': int(ctStamps[si]['xss'][sc]),
-                        'x': int(ctSa.xss[si, sc]),
+                        'x': int(ctSa['xss'][si, sc]),
                         # 'y': int(ctStamps[si]['yss'][sc]),
-                        'y': int(ctSa.yss[si, sc]),
+                        'y': int(ctSa['yss'][si, sc]),
                     }
                     # if sc == ctStamps[si]['sscnt']:
-                    if sc == ctSa.sscnt[si]:
+                    if sc == ctSa['sscnt'][si]:
                         entry['isUsed'] = 1
                     # elif sc < ctStamps[si]['sscnt']:
-                    elif sc < ctSa.sscnt[si]:
+                    elif sc < ctSa['sscnt'][si]:
                         entry['isUsed'] = -1
                     else:
                         entry['isUsed'] = 0
@@ -6145,18 +6320,18 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         if savexyflag:
             for si in range(niS):
                 # for sc in range(ciStamps[si]['nss']):
-                for sc in range(ciSa.nss[si]):
+                for sc in range(ciSa['nss'][si]):
                     entry = {
                         # 'x': int(ciStamps[si]['xss'][sc]),
-                        'x': int(ciSa.xss[si, sc]),
+                        'x': int(ciSa['xss'][si, sc]),
                         # 'y': int(ciStamps[si]['yss'][sc]),
-                        'y': int(ciSa.yss[si, sc]),
+                        'y': int(ciSa['yss'][si, sc]),
                     }
                     # if sc == ciStamps[si]['sscnt']:
-                    if sc == ciSa.sscnt[si]:
+                    if sc == ciSa['sscnt'][si]:
                         entry['isUsed'] = 1
                     # elif sc < ciStamps[si]['sscnt']:
-                    elif sc < ciSa.sscnt[si]:
+                    elif sc < ciSa['sscnt'][si]:
                         entry['isUsed'] = -1
                     else:
                         entry['isUsed'] = 0
@@ -6169,7 +6344,16 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
     noiseData1d = tRData1d if convTmpl else iRData1d
 
-    result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, 0)
+    # result = build_stamps_flatten_helper(ctSa, ciSa, ntS, niS, None, None, None, 0)
+    result = {
+        'niS': niS, 'ntS': ntS,
+        'ctStamps': ctSa,
+        'ciStamps': ciSa,
+        'kernel_vec': None,
+        'filter_x': None,
+        'filter_y': None,
+        'status': 0,
+    }
     result.update({
         'oRData': oRData1d.reshape(rPixY, rPixX),
         'noiseData': noiseData1d.reshape(rPixY, rPixX),
@@ -6275,15 +6459,15 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     iRData = convolve_result['iRData']
     ctSa = convolve_result.get('ctStamps')
     ciSa = convolve_result.get('ciStamps')
-    # 扁平数组字段（从 convolve_result 读取）
-    ctSscntOut = convolve_result.get('ctSscnt')
-    ctNssOut = convolve_result.get('ctNss')
-    ctXssOut = convolve_result.get('ctXss')
-    ctYssOut = convolve_result.get('ctYss')
-    ciSscntOut = convolve_result.get('ciSscnt')
-    ciNssOut = convolve_result.get('ciNss')
-    ciXssOut = convolve_result.get('ciXss')
-    ciYssOut = convolve_result.get('ciYss')
+    # 扁平数组字段（从 ctSa/ciSa dict 读取）
+    ctSscntOut = ctSa['sscnt'] if ctSa is not None else None
+    ctNssOut = ctSa['nss'] if ctSa is not None else None
+    ctXssOut = ctSa['xss'] if ctSa is not None else None
+    ctYssOut = ctSa['yss'] if ctSa is not None else None
+    ciSscntOut = ciSa['sscnt'] if ciSa is not None else None
+    ciNssOut = ciSa['nss'] if ciSa is not None else None
+    ciXssOut = ciSa['xss'] if ciSa is not None else None
+    ciYssOut = ciSa['yss'] if ciSa is not None else None
     # (now also exposing flattened fields from convolve_result)
 
     oRData1d = oRData.ravel()
@@ -6353,9 +6537,9 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                         temp2[kk] = sig
                         kk += 1
                 elif ctSa is not None:
-                    if ctSa.sscnt[l] < ctSa.nss[l]:
+                    if ctSa['sscnt'][l] < ctSa['nss'][l]:
                         sig = get_final_stamp_sig_numpy(
-                            ctSa.xss, ctSa.yss, ctSa.sscnt, l, oRData1d, noiseData1d,
+                            ctSa['xss'], ctSa['yss'], ctSa['sscnt'], l, oRData1d, noiseData1d,
                             fwKSStamp, hwKSStamp, rPixX, mRData1d)
                         temp2[kk] = sig
                         kk += 1
@@ -6391,9 +6575,9 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
                         temp2[kk] = sig
                         kk += 1
                 elif ciSa is not None:
-                    if ciSa.sscnt[l] < ciSa.nss[l]:
+                    if ciSa['sscnt'][l] < ciSa['nss'][l]:
                         sig = get_final_stamp_sig_numpy(
-                            ciSa.xss, ciSa.yss, ciSa.sscnt, l, oRData1d, noiseData1d,
+                            ciSa['xss'], ciSa['yss'], ciSa['sscnt'], l, oRData1d, noiseData1d,
                             fwKSStamp, hwKSStamp, rPixX, mRData1d)
                         temp2[kk] = sig
                         kk += 1

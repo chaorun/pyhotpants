@@ -199,3 +199,38 @@ vs 当前 jit kernel: ~2.5s（逐块多项式展开 102400 次）
 ```
 
 这是阶段 1 的核心依据。
+
+---
+
+## 阶段 1 完成
+
+**commit**: `1d813f6`
+
+**改动**：`alard.py`
+
+| 变更 | 说明 |
+|------|------|
+| 新增 `buildAllKernels()` | numpy broadcasting 批量构造 102400 个 kcStep 块核，`kernelCoeffs @ kernelVec2d` 矩阵乘 |
+| 修改 `spatial_convolve_jit_kernel` | 新增 `allKernels` + `nstepsXIn` 可选参数，`blockIdx = j1*nstepsX + i1` 查表替代逐块多项式展开 |
+| 修改 `spatial_convolve_fast_numpy` | 调用 `buildAllKernels()` → 传入 `allKernels` 给 jit kernel |
+
+**性能**：
+
+| | 阶段 1 前 | 阶段 1 后 (热态) |
+|------|----------|----------|
+| convolve_diff | 4.1s | 2.01s |
+| 总计 | 7.0s | **3.78s** |
+| vs C (5s) | 1.4x | **0.76x** |
+
+**精度**：maskOut EXACT MATCH。
+
+**实际总览更新**：
+
+| 阶段 | 耗时降幅 | 累计耗时 | vs C | 状态 |
+|------|---------|---------|------|------|
+| 当前 | — | 7.0s | 1.4x | — |
+| 1: spatial_convolve 批量核 | -3.2s | **3.8s** | **0.76x** | ✅ 完成 |
+| 2: fill_stamp 批量 | -0.9s | 2.9s | 0.58x | 待开始 |
+| 3: psfCentersJit 矢量化 | -0.2s | 2.7s | 0.54x | 待开始 |
+| 4: make_model 批量 | -0.05s | 2.65s | 0.53x | 待开始 |
+| 5: build_matrix 合并 | -0.2s | **2.45s** | **0.49x** | 待开始 |
