@@ -506,7 +506,7 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
                 wxy[i, j] = 0.0
         matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
         return matrix
-    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1)
+    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1 if nKSStamps is not None else saXss.shape[1] - 1)
     all_x = np.where(valid_mask, saXss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
     all_y = np.where(valid_mask, saYss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
@@ -569,7 +569,7 @@ def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, im
     n_valid = valid_mask.sum()
     if n_valid == 0:
         return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
-    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1)
+    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1 if nKSStamps is not None else saXss.shape[1] - 1)
     all_x = np.where(valid_mask, saXss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
     all_y = np.where(valid_mask, saYss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
 

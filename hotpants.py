@@ -2685,7 +2685,7 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
                 wxy[i, j] = 0.0
         matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
         return matrix
-    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1)
+    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1 if nKSStamps is not None else saXss.shape[1] - 1)
     all_x = np.where(valid_mask, saXss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
     all_y = np.where(valid_mask, saYss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
@@ -2840,7 +2840,7 @@ def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, im
     n_valid = valid_mask.sum()
     if n_valid == 0:
         return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
-    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1)
+    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1 if nKSStamps is not None else saXss.shape[1] - 1)
     all_x = np.where(valid_mask, saXss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
     all_y = np.where(valid_mask, saYss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
@@ -4809,6 +4809,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     # 从 sa dict 提取扁平数组（用于后续扁平化的函数调用）
     saMat      = sa['mat']
     saVectors  = sa['vectors']
+    nS         = sa['nS'] if 'nS' in sa else saMat.shape[0]
     saSscnt    = sa['sscnt']
     saNss      = sa['nss']
     saXss      = sa['xss']
@@ -5159,6 +5160,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             ct['fwSq'] = fwSq
             ct['nVec'] = nVec
             ctSa = ct
+            ctSa['nS'] = nStamps
         if localForceConvolve != "t":
             # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
             #             for _ in range(nStamps)]
@@ -5197,6 +5199,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             ci['fwSq'] = fwSq
             ci['nVec'] = nVec
             ciSa = ci
+            ciSa['nS'] = nStamps
 
         # None-safe 辅助变量：当 forceConvolve=="t" 时 ciSa 为 None，forceConvolve=="i" 时 ctSa 为 None
         if ctSa is not None:
@@ -5626,6 +5629,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 ct['fwSq'] = fwSq
                 ct['nVec'] = nVec
                 ctSa = ct
+                ctSa['nS'] = nStamps
             if localForceConvolve != "t":
                 # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
                 #             for _ in range(nStamps)]
@@ -5664,6 +5668,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 ci['fwSq'] = fwSq
                 ci['nVec'] = nVec
                 ciSa = ci
+            ciSa['nS'] = nStamps
 
             mRData1d[:] = mRData1d & ~0xa00
 
