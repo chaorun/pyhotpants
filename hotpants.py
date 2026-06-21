@@ -6647,6 +6647,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
     mean_val = res_good['mean']
     sd_val = res_good['sd']
+    median_val = res_good['median']
+    mode_val = res_good['mode']
     # sys.stderr.write("   Mean   : %.2f\n" % res_good['mean'])
     # sys.stderr.write("   Median : %.2f\n" % res_good['median'])
     # sys.stderr.write("   Mode   : %.2f\n" % res_good['mode'])
@@ -6662,6 +6664,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         noiseData_2d, 0, 0, rPixX, rPixY,
         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
     nmean_val = nres_good['mean']
+    nmedian_val = nres_good['median']
+    nmode_val = nres_good['mode']
 
     x2norm, nx2norm = get_noise_stats3_numpy(
         oRData1d, noiseData1d, 0x0, 0xffff, rPixX, rPixY, mRData1d)
@@ -6688,6 +6692,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
     meanm_val = res_ok['mean']
     sdm_val = res_ok['sd']
+    medianm_val = res_ok['median']
+    modem_val = res_ok['mode']
     # sys.stderr.write("   Mean   : %.2f\n" % res_ok['mean'])
     # sys.stderr.write("   Median : %.2f\n" % res_ok['median'])
     # sys.stderr.write("   Mode   : %.2f\n" % res_ok['mode'])
@@ -6703,6 +6709,8 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
         noiseData_2d, 0, 0, rPixX, rPixY,
         0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
     nmeanm_val = nres_ok['mean']
+    nmedianm_val = nres_ok['median']
+    nmodem_val = nres_ok['mode']
     # sys.stderr.write("   Mean   : %.2f\n" % nres_ok['mean'])
     # sys.stderr.write("   Median : %.2f\n" % nres_ok['median'])
     # sys.stderr.write("   Mode   : %.2f\n" % nres_ok['mode'])
@@ -6763,18 +6771,26 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     stats = {
         'convTmpl': convTmpl,
         'sumKernel': sumKernel,
-        'meansigSubstamps': meansigSubstamps,
-        'scatterSubstamps': scatterSubstamps,
-        'meansigSubstampsF': meansigSubstampsF,
-        'scatterSubstampsF': scatterSubstampsF,
+        'subMeanSig': meansigSubstamps,
+        'subScatterSig': scatterSubstamps,
+        'subFinalMeanSig': meansigSubstampsF,
+        'subFinalScatterSig': scatterSubstampsF,
         'x2norm': x2norm,
         'nx2norm': nx2norm,
-        'mean': mean_val,
-        'sd': sd_val,
-        'nmean': nmean_val,
-        'meanm': meanm_val,
-        'sdm': sdm_val,
-        'nmeanm': nmeanm_val,
+        'diff_good_mean': mean_val,
+        'diff_good_median': median_val,
+        'diff_good_mode': mode_val,
+        'diff_good_sd': sd_val,
+        'noise_good_mean': nmean_val,
+        'noise_good_median': nmedian_val,
+        'noise_good_mode': nmode_val,
+        'diff_ok_mean': meanm_val,
+        'diff_ok_median': medianm_val,
+        'diff_ok_mode': modem_val,
+        'diff_ok_sd': sdm_val,
+        'noise_ok_mean': nmeanm_val,
+        'noise_ok_median': nmedianm_val,
+        'noise_ok_mode': nmodem_val,
         'diffrat': diffrat,
         'kerSol': kerSol,
     }
@@ -7065,28 +7081,38 @@ def hotpants(
             stats_list.append({
                 'conv_tmpl': entry['convTmpl'],
                 'sum_kernel': entry['sumKernel'],
-                'mean_sig': entry['meansigSubstamps'],
-                'scatter_sig': entry['scatterSubstamps'],
-                'final_mean_sig': entry['meansigSubstampsF'],
-                'final_scatter_sig': entry['scatterSubstampsF'],
+                'sub_mean_sig': entry['subMeanSig'],
+                'sub_scatter_sig': entry['subScatterSig'],
+                'sub_final_mean_sig': entry['subFinalMeanSig'],
+                'sub_final_scatter_sig': entry['subFinalScatterSig'],
                 'x2norm': entry['x2norm'],
                 'nx2norm': entry['nx2norm'],
-                'diff_mean': entry['mean'],
-                'diff_sd': entry['sd'],
-                'noise_mean': entry['nmean'],
-                'diff_mean_ok': entry['meanm'],
-                'diff_sd_ok': entry['sdm'],
-                'noise_mean_ok': entry['nmeanm'],
+                'diff_good_mean': entry['diff_good_mean'],
+                'diff_good_median': entry['diff_good_median'],
+                'diff_good_mode': entry['diff_good_mode'],
+                'diff_good_sd': entry['diff_good_sd'],
+                'noise_good_mean': entry['noise_good_mean'],
+                'noise_good_median': entry['noise_good_median'],
+                'noise_good_mode': entry['noise_good_mode'],
+                'diff_ok_mean': entry['diff_ok_mean'],
+                'diff_ok_median': entry['diff_ok_median'],
+                'diff_ok_mode': entry['diff_ok_mode'],
+                'diff_ok_sd': entry['diff_ok_sd'],
+                'noise_ok_mean': entry['noise_ok_mean'],
+                'noise_ok_median': entry['noise_ok_median'],
+                'noise_ok_mode': entry['noise_ok_mode'],
                 'diffrat': entry['diffrat'],
             })
         else:
             stats_list.append({
                 'conv_tmpl': 0, 'sum_kernel': 0.0,
-                'mean_sig': 0.0, 'scatter_sig': 0.0,
-                'final_mean_sig': 0.0, 'final_scatter_sig': 0.0,
+                'sub_mean_sig': 0.0, 'sub_scatter_sig': 0.0,
+                'sub_final_mean_sig': 0.0, 'sub_final_scatter_sig': 0.0,
                 'x2norm': 0.0, 'nx2norm': 0,
-                'diff_mean': 0.0, 'diff_sd': 0.0, 'noise_mean': 0.0,
-                'diff_mean_ok': 0.0, 'diff_sd_ok': 0.0, 'noise_mean_ok': 0.0,
+                'diff_good_mean': 0.0, 'diff_good_median': 0.0, 'diff_good_mode': 0.0, 'diff_good_sd': 0.0,
+                'noise_good_mean': 0.0, 'noise_good_median': 0.0, 'noise_good_mode': 0.0,
+                'diff_ok_mean': 0.0, 'diff_ok_median': 0.0, 'diff_ok_mode': 0.0, 'diff_ok_sd': 0.0,
+                'noise_ok_mean': 0.0, 'noise_ok_median': 0.0, 'noise_ok_mode': 0.0,
                 'diffrat': 0.0,
             })
 
