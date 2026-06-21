@@ -2,6 +2,7 @@ import numpy as np
 import numba
 import math
 import logging
+from scipy.ndimage import maximum_filter
 logger = logging.getLogger('hotpants')
 
 ZEROVAL = 1e-10
@@ -735,6 +736,97 @@ def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
         return 0
 
 
+def psfCentersVectorized(iData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
+                         hiThresh, kerFitThreshVal, sky_val, invdsky_val,
+                         sx0_val, sy0_val, nKSStamps, bbit, bbit1, bbit2,
+                         xloc_out, yloc_out, peaks_out):
+    dfrac = 0.9
+    floorVal = sky_val + kerFitThreshVal / invdsky_val
+    xbuffer = 0
+    ybuffer = 0
+    fcnt = 2 * nKSStamps
+    pcnt = 0
+
+    iData2d = iData1d.reshape(sPixY, sPixX).astype(np.float64)
+    mRData2d = mRData1d.reshape(sPixY, sPixX)
+
+    bad_mask = (mRData2d & bbit) != 0
+    hi_mask = iData2d >= hiThresh
+    lo_mask = ((iData2d - sky_val) * invdsky_val) < kerFitThreshVal
+    border_mask = np.zeros((sPixY, sPixX), dtype=bool)
+    if ybuffer > 0:
+        border_mask[:ybuffer, :] = True
+        border_mask[-ybuffer:, :] = True
+    if xbuffer > 0:
+        border_mask[:, :xbuffer] = True
+        border_mask[:, -xbuffer:] = True
+
+    base_valid = ~bad_mask & ~hi_mask & ~lo_mask & ~border_mask
+
+    footprint = np.ones((2*hwKSStamp+1, 2*hwKSStamp+1), dtype=bool)
+
+    while pcnt < fcnt:
+        loPsf = sky_val + (hiThresh - sky_val) * dfrac
+        loPsf = max(loPsf, floorVal)
+
+        above_lo = iData2d >= loPsf
+        valid = base_valid & above_lo
+
+        if not valid.any():
+            if loPsf == floorVal:
+                break
+            dfrac -= 0.2
+            continue
+
+        padded = np.full((sPixY + 2*hwKSStamp, sPixX + 2*hwKSStamp), -np.inf, dtype=np.float64)
+        padded[hwKSStamp:-hwKSStamp, hwKSStamp:-hwKSStamp] = np.where(valid, iData2d, -np.inf)
+        local_max = maximum_filter(padded, footprint=footprint, mode='constant', cval=-np.inf)
+
+        is_peak = (padded == local_max) & (padded > -np.inf)
+        is_peak[:hwKSStamp, :] = False; is_peak[-hwKSStamp:, :] = False
+        is_peak[:, :hwKSStamp] = False; is_peak[:, -hwKSStamp:] = False
+
+        if not is_peak.any():
+            if loPsf == floorVal:
+                break
+            dfrac -= 0.2
+            continue
+
+        py, px = np.where(is_peak)
+        peak_vals = iData2d[py, px]
+        order = np.argsort(peak_vals)[::-1]
+        py, px = py[order], px[order]
+
+        for idx in range(len(px)):
+            if pcnt >= fcnt:
+                break
+            ip = px[idx]
+            jp = py[idx]
+            dmax_val = check_psf_center_numba(
+                iData1d, ip, jp, sPixX, sPixY,
+                sx0_val, sy0_val, hiThresh, sky_val, invdsky_val,
+                xbuffer, ybuffer, bbit, bbit1,
+                rPixX, hwKSStamp, mRData1d, kerFitThreshVal)
+            if dmax_val == 0.0:
+                continue
+            xloc_out[pcnt] = ip
+            yloc_out[pcnt] = jp
+            peaks_out[pcnt] = dmax_val
+            pcnt += 1
+            jlo = max(0, jp - hwKSStamp); jhi = min(sPixY, jp + hwKSStamp + 1)
+            ilo = max(0, ip - hwKSStamp); ihi = min(sPixX, ip + hwKSStamp + 1)
+            base_valid[jlo:jhi, ilo:ihi] = False
+            mRData1d_2d = mRData2d[jlo:jhi, ilo:ihi]
+            mRData2d[jlo:jhi, ilo:ihi] = mRData1d_2d | bbit2
+
+        if pcnt >= fcnt:
+            break
+        if loPsf == floorVal:
+            break
+        dfrac -= 0.2
+
+    return pcnt
+
 @numba.jit(nopython=True)
 def psfCentersJit(iData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
                    hiThresh, kerFitThreshVal, sky_val, invdsky_val,
@@ -896,7 +988,7 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 xloc = np.zeros(allocSize, dtype=np.int32)
                 yloc = np.zeros(allocSize, dtype=np.int32)
                 peaks = np.zeros(allocSize, dtype=np.float64)
-                pcnt = psfCentersJit(
+                pcnt = psfCentersVectorized(
                     tRData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
                     tUKThresh, kerFitThresh_t, ctMode[ntS], 1.0 / ctFwhm[ntS],
                     ctX0[ntS], ctY0[ntS], nKSStamps,
@@ -958,7 +1050,7 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 xloc = np.zeros(allocSize, dtype=np.int32)
                 yloc = np.zeros(allocSize, dtype=np.int32)
                 peaks = np.zeros(allocSize, dtype=np.float64)
-                pcnt = psfCentersJit(
+                pcnt = psfCentersVectorized(
                     iRData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
                     iUKThresh, kerFitThresh_i, ciMode[niS], 1.0 / ciFwhm[niS],
                     ciX0[niS], ciY0[niS], nKSStamps,
