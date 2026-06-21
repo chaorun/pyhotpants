@@ -2002,6 +2002,9 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
     nskippedSubstamps = 0
     refill_indices = []
 
+    sscnt_local = saSscnt[:nS].copy()
+    chi2_local = saChi2[:nS].copy()
+
     # 批量计算所有 stamps 的 sig (figMerit="v" 模式)
     batch_sig1 = None
     if figMerit[0:1] == "v":
@@ -2014,9 +2017,9 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
         xf_batch = np.zeros(nS, dtype=np.float64)
         yf_batch = np.zeros(nS, dtype=np.float64)
         for si in range(nS):
-            if saSscnt[si] < saNss[si]:
-                xi = float(saXss[si, saSscnt[si]])
-                yi = float(saYss[si, saSscnt[si]])
+            if sscnt_local[si] < saNss[si]:
+                xi = float(saXss[si, sscnt_local[si]])
+                yi = float(saYss[si, sscnt_local[si]])
                 xf_batch[si] = (xi - halfX) / halfX
                 yf_batch[si] = (yi - halfY) / halfY
 
@@ -2059,7 +2062,7 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
             batched_bg=batched_bg, batched_coeffs=batched_coeffs4)
 
     for istamp in range(nS):
-        if saSscnt[istamp] < saNss[istamp]:
+        if sscnt_local[istamp] < saNss[istamp]:
             if batch_sig1 is not None:
                 sig1 = batch_sig1[istamp]
                 sig2 = batch_sig2[istamp]
@@ -2070,7 +2073,7 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
                 #     fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
                 #     figMerit, statSig, nCompKer, kerOrder, bgOrder)
                 # 内联 get_stamp_sig_numpy 逻辑，使用扁平数组
-                sscnt = saSscnt[istamp]
+                sscnt = sscnt_local[istamp]
                 xRegion = int(saXss[istamp, sscnt])
                 yRegion = int(saYss[istamp, sscnt])
                 im = saKrefArea[istamp]
@@ -2109,7 +2112,7 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
             if (figMerit[0:1] == "v" and sig1 == -1) or \
                (figMerit[0:1] == "s" and sig2 == -1) or \
                (figMerit[0:1] == "h" and sig3 == -1):
-                saSscnt[istamp] += 1
+                sscnt_local[istamp] += 1
                 # fill_stamp_numpy(sa, istamp, imConv, imRef, rPixX, rPixY, verbose,
                 #                  ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                 #                  bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
@@ -2124,7 +2127,7 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
                 elif figMerit[0:1] == "h":
                     sig = sig3
 
-                saChi2[istamp] = sig
+                chi2_local[istamp] = sig
                 ss[nss] = sig
                 nss += 1
         else:
@@ -2138,11 +2141,11 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
     scnt = 0
     for istamp in range(nS):
         # if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
-        if saSscnt[istamp] < saNss[istamp]:
+        if sscnt_local[istamp] < saNss[istamp]:
             # if (stamps[istamp]['chi2'] - mean) > kerSigReject * stdev:
-            if (saChi2[istamp] - mean) > kerSigReject * stdev:
+            if (chi2_local[istamp] - mean) > kerSigReject * stdev:
                 # stamps[istamp]['sscnt'] += 1
-                saSscnt[istamp] += 1
+                sscnt_local[istamp] += 1
                 # rc = fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
                 #                       ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                 #                       bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
@@ -2165,6 +2168,8 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
         'scatterSubstamps': scatterSubstamps,
         'nskippedSubstamps': nskippedSubstamps,
         'refill_indices': refill_indices,
+        'sscnt_update': sscnt_local,
+        'chi2_update': chi2_local,
     }
 
 def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
@@ -2292,6 +2297,8 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         hwKernel, fwKernel, usePCA, filter_x, filter_y,
         PCA, fillVal)
     check = ca_result['check']
+    saSscnt[:nS] = ca_result['sscnt_update']
+    saChi2[:nS] = ca_result['chi2_update']
     meansigSubstamps = ca_result['meansigSubstamps']
     scatterSubstamps = ca_result['scatterSubstamps']
     nskippedSubstamps = ca_result['nskippedSubstamps']
@@ -2358,6 +2365,8 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
             hwKernel, fwKernel, usePCA, filter_x, filter_y,
             PCA, fillVal)
         check = ca_result['check']
+        saSscnt[:nS] = ca_result['sscnt_update']
+        saChi2[:nS] = ca_result['chi2_update']
         meansigSubstamps = ca_result['meansigSubstamps']
         scatterSubstamps = ca_result['scatterSubstamps']
         nskippedSubstamps = ca_result['nskippedSubstamps']
