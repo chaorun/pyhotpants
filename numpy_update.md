@@ -92,3 +92,130 @@
 | 5: build_matrix 合并 | -0.2s | **3.45s** | **0.69x** |
 
 目标：**超越 C 版本**（5s → 3.45s）。
+
+---
+
+## 背景上下文（给下一个对话）
+
+### 整体历程
+
+```
+670s (初版纯Python)
+  → 150s (numpy矢量化)
+  → 90s (numba jit各子函数)
+  → 42s (variance/mask numba)
+  → 22s (get_stamp_sig numba)
+  → 13.7s (background/noise矢量化)
+  → 7.0s (当前 — StampsArray SoA + 全链路 numba + parallel)
+  → 3.45s (目标)
+```
+
+### 当前性能分布（7.0s，1K×1K 单 region，nsx=10 nsy=10 ko=2 bgo=2 c=t n=t v=0）
+
+| 步骤 | 耗时 | 内部 |
+|------|------|------|
+| setup | 0.07s | — |
+| buildstamps | 0.7s | buildStampsNumba + psfCentersJit |
+| fit | 1.6s | fill_stamp_numba_kernel + check_stamps + check_again |
+| convolve_diff | 4.1s | fitKernel 2.3s + spatial_convolve ~1s + bg/noise |
+| output | 0.5s | get_stamp_stats3 + final_sig |
+
+### convolve_diff 4.1s 细分
+
+| 子步骤 | 耗时 | 状态 |
+|--------|------|------|
+| fitKernel (17次迭代) | ~2.3s | build+scprod 0.04s/次, check_again 0.03s/次 |
+| spatial_convolve | ~1.0s | 已加 parallel=True, 还有批量核构造空间 |
+| background | 0.12s | 已 jit |
+| noise_combine | 0.02s | 已矢量化 |
+
+### 关键代码位置 (numutils.py)
+
+| 函数 | 行号 | 作用 |
+|------|------|------|
+| `buildStampsNumba` | ~1507 | 扁平参数 buildstamps |
+| `psfCentersJit` | ~1436 | @jit while循环 |
+| `fill_stamp_numba_kernel` | ~2766 | @jit 5步合并 |
+| `spatial_convolve_fast_numpy` | ~4044 | conv_diff 主函数 |
+| `spatial_convolve_jit_kernel` | ~3660 | @jit parallel C翻译版 |
+| `check_psf_center_numba` | ~750 | @jit |
+| `get_stamp_sig_batch_jit` | ~3130 | @jit 批量sig |
+| `get_noise_stats3_numpy` | ~220 | @jit 逐像素for |
+| `background_loop_jit` | ~1807 | @jit |
+
+### 精度基线
+
+- maskOut: **EXACT MATCH**（最重要）
+- diffOut: max_abs=2.57e-02（float32/float64 浮点差异）
+- noiseOut: max_abs=3.05e-05
+- convOut: max_abs=2.54e-02
+
+### 测试命令
+
+```bash
+# 1K 精度 + 性能测试
+cd /Users/chaorun/Code/Githubs/hotpants
+mkdir -p tmp/precision_test/py tmp/precision_test/c
+
+# C 版本
+raw_code/hotpants -inim testdata/input1K.fit -tmplim testdata/templ1K.fit \
+  -outim tmp/precision_test/c/out.fit \
+  -oni tmp/precision_test/c/n.fits \
+  -oci tmp/precision_test/c/c.fits \
+  -omi tmp/precision_test/c/m.fits \
+  -c t -n t -nsx 10 -nsy 10 -ko 2 -bgo 2 2>/dev/null
+
+# Python 版本
+python3 -u -c "
+import logging; logging.getLogger('numba').setLevel(logging.WARNING)
+from astropy.io import fits; import numpy as np
+from pyhotpants import hotpants
+tmpl = fits.getdata('testdata/templ1K.fit').astype(np.float32)
+sci = fits.getdata('testdata/input1K.fit').astype(np.float32)
+diff, noise, conv, mask, stats = hotpants(inim=sci, tmplim=tmpl, c='t', n='t', nsx=10, nsy=10, ko=2, bgo=2, v=0)
+fits.writeto('tmp/precision_test/py/out.fit', diff, overwrite=True)
+if noise is not None: fits.writeto('tmp/precision_test/py/n.fits', noise, overwrite=True)
+if conv is not None: fits.writeto('tmp/precision_test/py/c.fits', conv, overwrite=True)
+if mask is not None: fits.writeto('tmp/precision_test/py/m.fits', mask.astype(np.int32), overwrite=True)
+print('DONE')
+"
+
+# 精度对比
+python3 -c "
+from astropy.io import fits; import numpy as np
+for fname,desc in [('out.fit','diffOut'),('n.fits','noiseOut'),('c.fits','convOut'),('m.fits','maskOut')]:
+    d1=fits.getdata('tmp/precision_test/py/'+fname).astype(float)
+    d2=fits.getdata('tmp/precision_test/c/'+fname).astype(float)
+    diff=np.abs(d1-d2); n=int((diff>1e-15).sum()); ma=float(diff.max())
+    if n==0: print(desc+': EXACT MATCH')
+    else: print(desc+': {} differ, max_abs={:.2e}'.format(n, ma))
+"
+```
+
+### AGENTS.md 关键规则
+
+- 禁止下划线开头命名
+- 禁止删除旧代码，逐行 # 注释
+- 禁止 replaceAll、sed/awk/python脚本改文件——必须用 edit 工具
+- **任何代码修改必须先 zip 备份到 backup/ 目录**
+- **不得未经允许 git commit / checkout / 从存档恢复**
+- 修改前必须征求用户允许
+
+### MLX 探索结论（见 pytorch_metal/metal_progress.md）
+
+- 12 个函数 MLX 实现已验证精度
+- spatial_convolve 的 MLX gather 方案在所有尺寸上慢于 numba parallel CPU
+- 结论：Apple Silicon 上 MLX 不适合 hotpants 这种"小批量"计算模式
+- 改回 numpy 优化路线
+
+### 关键性能测试基准（pytorch_metal/test_spatial_convolve_ultimate.py）
+
+```
+批量矢量化核构造 @ kernelVec2d: (nBlocks, nCompKer) @ (nCompKer, fwSq)
+numpy: 0.04s（102400 blocks × 49 components）
+
+CPU numba parallel: 1600×1600 nCompKer=49 → 0.09s
+vs 当前 jit kernel: ~2.5s（逐块多项式展开 102400 次）
+```
+
+这是阶段 1 的核心依据。
