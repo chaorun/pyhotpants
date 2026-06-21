@@ -1381,6 +1381,41 @@ def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMa
     #                                    convolveVariance, kerFracMask, mRData,
     #                                    rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
 
+def buildAllKernels(kernelSol, kernelVec2d, nCompKer, kerOrder, fwKernel, hwKernel, kcStep, rPixX, rPixY, xSize, ySize):
+    fwSq = fwKernel * fwKernel
+    halfX, halfY = 0.5 * rPixX, 0.5 * rPixY
+    nstepsX = int(np.ceil(xSize / kcStep))
+    nstepsY = int(np.ceil(ySize / kcStep))
+    nBlocks = nstepsX * nstepsY
+
+    i0Arr = np.arange(nstepsX) * kcStep + hwKernel
+    j0Arr = np.arange(nstepsY) * kcStep + hwKernel
+    iGrid, jGrid = np.meshgrid(i0Arr, j0Arr, indexing='ij')
+    xi = (iGrid + hwKernel).ravel().astype(np.float64)
+    yi = (jGrid + hwKernel).ravel().astype(np.float64)
+    xf = (xi - halfX) / halfX
+    yf = (yi - halfY) / halfY
+
+    kernelCoeffs = np.zeros((nBlocks, nCompKer), dtype=np.float64)
+    kernelCoeffs[:, 0] = kernelSol[1]
+
+    k = 2
+    for ig in range(1, nCompKer):
+        coeff = np.zeros(nBlocks, dtype=np.float64)
+        ax = np.ones(nBlocks, dtype=np.float64)
+        for ix in range(kerOrder + 1):
+            ay = np.ones(nBlocks, dtype=np.float64)
+            for iy in range(kerOrder - ix + 1):
+                coeff += kernelSol[k] * ax * ay
+                k += 1
+                ay *= yf
+            ax *= xf
+        kernelCoeffs[:, ig] = coeff
+
+    allKernels = kernelCoeffs @ kernelVec2d
+
+    return allKernels, nstepsX, nstepsY
+
 @numba.jit(nopython=True, parallel=True)
 def spatial_convolve_jit_kernel(
     image, variance, cMask,
@@ -1388,7 +1423,9 @@ def spatial_convolve_jit_kernel(
     kernelSol,
     xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
     kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
-    kernel_vec_2d):
+    kernel_vec_2d,
+    allKernels=None,
+    nstepsX_in=None):
 
     fwSq = fwKernel * fwKernel
     FLAG_INPUT_ISBAD = np.int32(0x80)
@@ -1409,34 +1446,35 @@ def spatial_convolve_jit_kernel(
         for i1 in range(nsteps_x):
             i0 = i1 * kcStep + hwKernel
 
-            # ---- make_kernel(i0+hwKernel, j0+hwKernel) ----
-            kernel = np.zeros(fwSq, dtype=np.float64)
-            kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
-            xi = i0 + hwKernel
-            yi = j0 + hwKernel
-            xf = (xi - halfX) / halfX
-            yf = (yi - halfY) / halfY
+            if allKernels is not None:
+                kernel = allKernels[j1 * nstepsX_in + i1]
+            else:
+                # ---- make_kernel(i0+hwKernel, j0+hwKernel) ----
+                kernel = np.zeros(fwSq, dtype=np.float64)
+                kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
+                xi = i0 + hwKernel
+                yi = j0 + hwKernel
+                xf = (xi - halfX) / halfX
+                yf = (yi - halfY) / halfY
 
-            k = 2
-            for i1k in range(1, nCompKer):
-                coeff = 0.0
-                ax = 1.0
-                for ix in range(kerOrder + 1):
-                    ay = 1.0
-                    for iy in range(kerOrder - ix + 1):
-                        coeff += kernelSol[k] * ax * ay
-                        k += 1
-                        ay *= yf
-                    ax *= xf
-                kernel_coeffs[i1k] = coeff
-            kernel_coeffs[0] = kernelSol[1]
+                k = 2
+                for i1k in range(1, nCompKer):
+                    coeff = 0.0
+                    ax = 1.0
+                    for ix in range(kerOrder + 1):
+                        ay = 1.0
+                        for iy in range(kerOrder - ix + 1):
+                            coeff += kernelSol[k] * ax * ay
+                            k += 1
+                            ay *= yf
+                        ax *= xf
+                    kernel_coeffs[i1k] = coeff
+                kernel_coeffs[0] = kernelSol[1]
 
-            # for ii in range(fwSq):
-            #     kernel[ii] = 0.0  # already zeros from np.zeros
-            for ii in range(fwSq):
-                for c in range(nCompKer):
-                    kernel[ii] += kernel_coeffs[c] * kernel_vec_2d[c, ii]
-            # ---- end make_kernel ----
+                for ii in range(fwSq):
+                    for c in range(nCompKer):
+                        kernel[ii] += kernel_coeffs[c] * kernel_vec_2d[c, ii]
+                # ---- end make_kernel ----
 
             for j2 in range(kcStep):
                 j = j0 + j2
@@ -1643,13 +1681,20 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
                               for idx in range(nCompKer)])
     # t1 = time.time(); logger.debug("  sc_fast: prep %.3fs", t1 - t0)
 
+    allKernels, nstepsX, nstepsY = buildAllKernels(
+        kernelSol.astype(np.float64), kernel_vec_2d,
+        nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
+        rPixX, rPixY, xSize, ySize)
+
     spatial_convolve_jit_kernel(
         image1d, var1d, cMask1d,
         cRdata64, vData64, mRData64,
         kernelSol.astype(np.float64),
         xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
-        kernel_vec_2d)
+        kernel_vec_2d,
+        allKernels=allKernels,
+        nstepsX_in=nstepsX)
     # t2 = time.time(); logger.debug("  sc_fast: jit_kernel %.3fs", t2 - t1)
 
     if dovar:
