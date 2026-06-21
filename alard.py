@@ -1735,14 +1735,14 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
     # t1 = time.time(); logger.debug("  sc_fast: prep %.3fs", t1 - t0)
 
     allKernels, nstepsX, nstepsY = buildAllKernels(
-        kernelSol.astype(np.float64), kernel_vec_2d,
+        np.asarray(kernelSol, dtype=np.float64), kernel_vec_2d,
         nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
         rPixX, rPixY, xSize, ySize)
 
     spatial_convolve_jit_kernel(
         image1d, var1d, cMask1d,
         cRdata64, vData64, mRData64,
-        kernelSol.astype(np.float64),
+        np.asarray(kernelSol, dtype=np.float64),
         xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
         kernel_vec_2d,

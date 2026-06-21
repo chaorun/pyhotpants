@@ -4319,7 +4319,7 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
     spatial_convolve_jit_kernel(
         image1d, var1d, cMask1d,
         cRdata64, vData64, mRData64,
-        kernelSol.astype(np.float64),
+        np.asarray(kernelSol, dtype=np.float64),
         xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
         kernel_vec_2d)
@@ -6837,8 +6837,8 @@ def hotpants(
     if ng_sig is None:
         ng_sig = [0.7, 1.5, 3.0]
 
-    tmpl_arr = np.ascontiguousarray(tmplim, dtype=np.float32)
-    sci_arr = np.ascontiguousarray(inim, dtype=np.float32)
+    tmpl_arr = np.asarray(tmplim, dtype=np.float32)
+    sci_arr = np.asarray(inim, dtype=np.float32)
     tNx = tmpl_arr.shape[1]
     tNy = tmpl_arr.shape[0]
     iNx = sci_arr.shape[1]
@@ -6846,19 +6846,21 @@ def hotpants(
 
     tni_arr = None
     if tni is not None:
-        tni_arr = np.ascontiguousarray(tni, dtype=np.float32)
-
-    ini_arr = None
+        tni_arr = np.asarray(tni, dtype=np.float32)
+    else:
+        tni_arr = None
     if ini is not None:
-        ini_arr = np.ascontiguousarray(ini, dtype=np.float32)
-
-    tmi_arr = None
+        ini_arr = np.asarray(ini, dtype=np.float32)
+    else:
+        ini_arr = None
     if tmi is not None:
-        tmi_arr = np.ascontiguousarray(tmi, dtype=np.int32)
-
-    imi_arr = None
+        tmi_arr = np.asarray(tmi, dtype=np.int32)
+    else:
+        tmi_arr = None
     if imi is not None:
-        imi_arr = np.ascontiguousarray(imi, dtype=np.int32)
+        imi_arr = np.asarray(imi, dtype=np.int32)
+    else:
+        imi_arr = None
 
     tuk_val = float(tu) if tuk is None else float(tuk)
     iuk_val = float(iu) if iuk is None else float(iuk)
