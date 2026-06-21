@@ -883,14 +883,15 @@ def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, s
                               img_flat=img_flat, imRef_flat=imRef_flat, kernels_all=kernels_all)
     if isinstance(result, int):
         return result
+    out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val = result
     nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
     fwSqStamp = fwKSStamp * fwKSStamp
     nC = nCompKer + 1
-    saVectors[si, :nCompKer + nbg, :fwSqStamp] = result['vectors']
-    saKrefArea[si, :] = result['krefArea']
-    saMat[si, :nC + 1, :nC + 1] = result['mat']
-    saScprod[si, :nC + 1] = result['scprod']
-    saSumVal[si] = result['sum_val']
+    saVectors[si, :nCompKer + nbg, :fwSqStamp] = out_vectors
+    saKrefArea[si, :] = out_krefArea
+    saMat[si, :nC + 1, :nC + 1] = out_mat
+    saScprod[si, :nC + 1] = out_scprod
+    saSumVal[si] = out_sum_val
     return 0
 
 def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
@@ -963,9 +964,7 @@ def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef
         nvec, rflags, fillVal, mRData1d, verbose,
         out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val)
 
-    return dict(vectors=out_vectors, krefArea=out_krefArea,
-                mat=out_mat, scprod=out_scprod,
-                sum_val=out_sum_val[0])
+    return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[0]
 
 @numba.jit(nopython=True)
 def get_stamp_sig_batch_jit(
@@ -2158,15 +2157,8 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
 
     logger.debug("  check_again: done %.3fs check=%d meansig=%.4f scatter=%.4f skipped=%d refills=%d",
                  time.time() - t0, check, meansigSubstamps, scatterSubstamps, nskippedSubstamps, len(refill_indices))
-    return {
-        'check': check,
-        'meansigSubstamps': meansigSubstamps,
-        'scatterSubstamps': scatterSubstamps,
-        'nskippedSubstamps': nskippedSubstamps,
-        'refill_indices': refill_indices,
-        'sscnt_update': sscnt_local,
-        'chi2_update': chi2_local,
-    }
+    return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
+            refill_indices, sscnt_local, chi2_local)
 
 def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
                      verbose, nS, fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
@@ -2284,7 +2276,8 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     #     nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
     #     hwKernel, fwKernel, usePCA, filter_x, filter_y,
     #     PCA, fillVal)
-    ca_result = check_again_numpy(
+    (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
+     refill_indices, sscnt_update, chi2_update) = check_again_numpy(
         saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, saScprod, saKrefArea, saSumVal, kernelSol,
         imConv, imRef, imNoise,
         nS, verbose, figMerit, kerSigReject, statSig,
@@ -2292,13 +2285,10 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
         hwKernel, fwKernel, usePCA, filter_x, filter_y,
         PCA, fillVal)
-    check = ca_result['check']
-    saSscnt[:nS] = ca_result['sscnt_update']
-    saChi2[:nS] = ca_result['chi2_update']
-    meansigSubstamps = ca_result['meansigSubstamps']
-    scatterSubstamps = ca_result['scatterSubstamps']
-    nskippedSubstamps = ca_result['nskippedSubstamps']
-    for idx in ca_result['refill_indices']:
+    saSscnt[:nS] = sscnt_update
+    saChi2[:nS] = chi2_update
+
+    for idx in refill_indices:
         fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
                          ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                          bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
@@ -2352,7 +2342,8 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         #     nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
         #     hwKernel, fwKernel, usePCA, filter_x, filter_y,
         #     PCA, fillVal)
-        ca_result = check_again_numpy(
+        (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
+         refill_indices, sscnt_update, chi2_update) = check_again_numpy(
             saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, saScprod, saKrefArea, saSumVal, kernelSol,
             imConv, imRef, imNoise,
             nS, verbose, figMerit, kerSigReject, statSig,
@@ -2360,13 +2351,10 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
             nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
             hwKernel, fwKernel, usePCA, filter_x, filter_y,
             PCA, fillVal)
-        check = ca_result['check']
-        saSscnt[:nS] = ca_result['sscnt_update']
-        saChi2[:nS] = ca_result['chi2_update']
-        meansigSubstamps = ca_result['meansigSubstamps']
-        scatterSubstamps = ca_result['scatterSubstamps']
-        nskippedSubstamps = ca_result['nskippedSubstamps']
-        for idx in ca_result['refill_indices']:
+        saSscnt[:nS] = sscnt_update
+        saChi2[:nS] = chi2_update
+
+        for idx in refill_indices:
             fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, saX0, saY0, idx, imConv, imRef, rPixX, rPixY, verbose,
                              ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                              bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
