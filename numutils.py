@@ -3657,7 +3657,7 @@ def spatial_convolve_numpy(image, variance, xSize, ySize, kernelSol, cRdata, cMa
     #                                    rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
 
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, parallel=True)
 def spatial_convolve_jit_kernel(
     image, variance, cMask,
     cRdata, vData, mRData,
@@ -3674,18 +3674,20 @@ def spatial_convolve_jit_kernel(
     halfX = 0.5 * rPixX
     halfY = 0.5 * rPixY
 
-    kernel = np.zeros(fwSq, dtype=np.float64)
-    kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
+    # kernel = np.zeros(fwSq, dtype=np.float64)  # moved inside prange
+    # kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)  # moved inside prange
 
     nsteps_x = int(np.ceil(xSize / kcStep))
     nsteps_y = int(np.ceil(ySize / kcStep))
 
-    for j1 in range(nsteps_y):
+    for j1 in numba.prange(nsteps_y):
         j0 = j1 * kcStep + hwKernel
         for i1 in range(nsteps_x):
             i0 = i1 * kcStep + hwKernel
 
             # ---- make_kernel(i0+hwKernel, j0+hwKernel) ----
+            kernel = np.zeros(fwSq, dtype=np.float64)
+            kernel_coeffs = np.zeros(nCompKer, dtype=np.float64)
             xi = i0 + hwKernel
             yi = j0 + hwKernel
             xf = (xi - halfX) / halfX
@@ -3705,8 +3707,8 @@ def spatial_convolve_jit_kernel(
                 kernel_coeffs[i1k] = coeff
             kernel_coeffs[0] = kernelSol[1]
 
-            for ii in range(fwSq):
-                kernel[ii] = 0.0
+            # for ii in range(fwSq):
+            #     kernel[ii] = 0.0  # already zeros from np.zeros
             for ii in range(fwSq):
                 for c in range(nCompKer):
                     kernel[ii] += kernel_coeffs[c] * kernel_vec_2d[c, ii]
