@@ -480,6 +480,9 @@ def build_scprod0_numpy(saVectors, saScprod, saXss, saYss, saSscnt, si, image, n
 
 def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy, nC=None, nKSStamps=None, wxy_pre=None):
     # def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
+    import time
+    t0 = time.time()
+    logger.debug("  build_matrix: entering nS=%d fwKSStamp=%d", nS, fwKSStamp)
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
@@ -498,7 +501,7 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
     #         all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
     #         all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
     #         n_valid += 1
-    valid_mask = (saSscnt < saNss).astype(np.int32)
+    valid_mask = (saSscnt[:nS] < saNss[:nS]).astype(np.int32)
     n_valid = valid_mask.sum()
     if n_valid == 0:
         for i in range(nS):
@@ -506,9 +509,9 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
                 wxy[i, j] = 0.0
         matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
         return matrix
-    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1 if nKSStamps is not None else saXss.shape[1] - 1)
-    all_x = np.where(valid_mask, saXss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
-    all_y = np.where(valid_mask, saYss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    safe_sscnt = np.clip(saSscnt[:nS], 0, nKSStamps - 1)
+    all_x = np.where(valid_mask, saXss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    all_y = np.where(valid_mask, saYss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
     # if n_valid == 0:
     #     for i in range(nS):
@@ -544,10 +547,14 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
         for j in range(i + 1):
             matrix[j + 1, i + 1] = matrix[i + 1, j + 1]
 
+    logger.debug("  build_matrix: done %.3fs n_valid=%d", time.time() - t0, valid_mask.sum())
     return matrix
 
 def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=None):
     # def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
+    import time
+    t0 = time.time()
+    logger.debug("  build_scprod: entering nS=%d fwKSStamp=%d", nS, fwKSStamp)
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
@@ -565,13 +572,13 @@ def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, im
     #         all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
     #         all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
     #         n_valid += 1
-    valid_mask = (saSscnt < saNss).astype(np.int32)
+    valid_mask = (saSscnt[:nS] < saNss[:nS]).astype(np.int32)
     n_valid = valid_mask.sum()
     if n_valid == 0:
         return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
-    safe_sscnt = np.clip(saSscnt, 0, nKSStamps - 1 if nKSStamps is not None else saXss.shape[1] - 1)
-    all_x = np.where(valid_mask, saXss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
-    all_y = np.where(valid_mask, saYss[np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    safe_sscnt = np.clip(saSscnt[:nS], 0, nKSStamps - 1)
+    all_x = np.where(valid_mask, saXss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    all_y = np.where(valid_mask, saYss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
 
     # if n_valid == 0:
     #     return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
@@ -592,8 +599,9 @@ def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, im
     build_scprod_jit(all_vectors, all_scprod, valid_mask, all_x, all_y,
                      wxy, image_arr, kernelSol,
                      nS, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX,
-                     ncomp, ncomp1, ncomp2, nbg_vec, pixStamp)
+                      ncomp, ncomp1, ncomp2, nbg_vec, pixStamp)
 
+    logger.debug("  build_scprod: done %.3fs", time.time() - t0)
     return kernelSol
 
 @numba.jit(nopython=True)
@@ -907,6 +915,8 @@ def fill_stamp_numba(saVectors, saMat, saScprod, saKrefArea, saSumVal, saXss, sa
     xi = int(saXss[si, saSscnt[si]])
     yi = int(saYss[si, saSscnt[si]])
 
+    logger.debug("  fill_stamp: si=%d xi=%d yi=%d nvec=%d", si, xi, yi, nvec)
+
     if img_flat is None:
         img_flat = np.asarray(imConv, dtype=np.float64).ravel()
     if imRef_flat is None:
@@ -935,8 +945,8 @@ def fill_stamp_numba(saVectors, saMat, saScprod, saKrefArea, saSumVal, saXss, sa
 
     out_vectors = np.zeros((nvec + nbg, fwSqStamp), dtype=np.float64)
     out_krefArea = np.zeros(fwSqStamp, dtype=np.float64)
-    out_mat = np.zeros((nC, nC), dtype=np.float64)
-    out_scprod = np.zeros(nC, dtype=np.float64)
+    out_mat = np.zeros((nC + 1, nC + 1), dtype=np.float64)
+    out_scprod = np.zeros(nC + 1, dtype=np.float64)
     out_sum_val = np.zeros(1, dtype=np.float64)
 
     fill_stamp_numba_kernel(
@@ -952,9 +962,9 @@ def fill_stamp_numba(saVectors, saMat, saScprod, saKrefArea, saSumVal, saXss, sa
     # sa.krefArea[si, :] = out_krefArea
     saKrefArea[si, :] = out_krefArea
     # sa.mat[si, :nC, :nC] = out_mat
-    saMat[si, :nC, :nC] = out_mat
+    saMat[si, :nC + 1, :nC + 1] = out_mat
     # sa.scprod[si, :nC] = out_scprod
-    saScprod[si, :nC] = out_scprod
+    saScprod[si, :nC + 1] = out_scprod
     # sa.sum_val[si] = out_sum_val[0]
     saSumVal[si] = out_sum_val[0]
 
@@ -1163,6 +1173,8 @@ def get_stamp_sig_numpy(sa, si, kernelSol, imNoise, fwKSStamp, hwKSStamp,
     # yRegion = int(stamp_dict['yss'][sscnt])
     yRegion = int(sa.yss[si, sscnt])
 
+    logger.debug("    get_stamp_sig: si=%d x=%d y=%d figMerit=%s", si, xRegion, yRegion, figMerit)
+
     # im = stamp_dict['krefArea']
     im = sa.krefArea[si]
     # vectors = np.asarray(stamp_dict['vectors'], dtype=np.float64)
@@ -1227,8 +1239,7 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         conv_maps.append(fftconvolve(image_2d, basis, mode='same'))
 
     t1 = time.time()
-    # sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
-    logger.debug("  FFT convolve (%d basis): %.2f s", nCompKer, t1 - t0)
+    sys.stderr.write("  FFT convolve (%d basis): %.2f s\n" % (nCompKer, t1 - t0))
 
     halfX = 0.5 * rPixX
     halfY = 0.5 * rPixY
@@ -1264,8 +1275,7 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         output += cf * conv_maps[i1]
 
     t2 = time.time()
-    # sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
-    logger.debug("  Poly weighting: %.2f s", t2 - t1)
+    sys.stderr.write("  Poly weighting: %.2f s\n" % (t2 - t1))
 
     sy = slice(hwKernel, ySize - hwKernel)
     sx = slice(hwKernel, xSize - hwKernel)
@@ -1298,8 +1308,7 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
         vData2d[sy, sx] = varOutput[sy, sx]
 
     t3 = time.time()
-    # sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
-    logger.debug("  Variance: %.2f s", t3 - t2)
+    sys.stderr.write("  Variance: %.2f s\n" % (t3 - t2))
 
     cMaskView = np.asarray(cMask).reshape(ySize, xSize)
     mRDataView = np.asarray(mRData).reshape(ySize, xSize)
@@ -1315,8 +1324,7 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
     maskPixX += hwKernel
     nMaskPix = len(maskPixY)
 
-    # sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
-    logger.debug("  Mask pixels to check: %d", nMaskPix)
+    sys.stderr.write("  Mask pixels to check: %d\n" % nMaskPix)
 
     for pidx in range(nMaskPix):
         j = int(maskPixY[pidx])
@@ -1347,10 +1355,8 @@ def spatial_convolve_numpy_fast(image, variance, xSize, ySize, kernelSol, cRdata
             mRData[ni] = int(mRData[ni]) | FLAG_OK_CONV
 
     t4 = time.time()
-    # sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
-    # sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
-    logger.debug("  Mask handling: %.2f s", t4 - t3)
-    logger.debug("  Total spatial_convolve_fast: %.2f s", t4 - t0)
+    sys.stderr.write("  Mask handling: %.2f s\n" % (t4 - t3))
+    sys.stderr.write("  Total spatial_convolve_fast: %.2f s\n" % (t4 - t0))
 
     return vData
 
@@ -1441,7 +1447,7 @@ def buildAllKernels(kernelSol, kernelVec2d, nCompKer, kerOrder, fwKernel, hwKern
 
     i0Arr = np.arange(nstepsX) * kcStep + hwKernel
     j0Arr = np.arange(nstepsY) * kcStep + hwKernel
-    iGrid, jGrid = np.meshgrid(i0Arr, j0Arr, indexing='ij')
+    iGrid, jGrid = np.meshgrid(i0Arr, j0Arr, indexing='xy')
     xi = (iGrid + hwKernel).ravel().astype(np.float64)
     yi = (jGrid + hwKernel).ravel().astype(np.float64)
     xf = (xi - halfX) / halfX
@@ -1708,11 +1714,10 @@ def mask_check_loop_jit(maskPixY, maskPixX, cMask2d, mRData1d,
 def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask, kcStep,
                                 hwKernel, fwKernel, kernel, kernel_coeffs,
                                 convolveVariance, kerFracMask,
-                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec, logger=None):
-    # import time
-    # t0 = time.time()
-    if logger is None:
-        logger = logging.getLogger('hotpants')
+                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+    import time
+    t0 = time.time()
+    logger.debug("  sc_fast: start size=(%d,%d) fwKernel=%d nCompKer=%d", xSize, ySize, fwKernel, nCompKer)
     fwSq = fwKernel * fwKernel
     dovar = variance is not None
 
@@ -1732,30 +1737,30 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
 
     kernel_vec_2d = np.array([np.asarray(kernel_vec[idx][:fwSq], dtype=np.float64)
                               for idx in range(nCompKer)])
-    # t1 = time.time(); logger.debug("  sc_fast: prep %.3fs", t1 - t0)
+    t1 = time.time(); logger.debug("  sc_fast: prep %.3fs", t1 - t0)
 
     allKernels, nstepsX, nstepsY = buildAllKernels(
-        np.asarray(kernelSol, dtype=np.float64), kernel_vec_2d,
+        kernelSol.astype(np.float64), kernel_vec_2d,
         nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
         rPixX, rPixY, xSize, ySize)
 
     spatial_convolve_jit_kernel(
         image1d, var1d, cMask1d,
         cRdata64, vData64, mRData64,
-        np.asarray(kernelSol, dtype=np.float64),
+        kernelSol.astype(np.float64),
         xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
         kernel_vec_2d,
         allKernels=allKernels,
         nstepsX_in=nstepsX)
-    # t2 = time.time(); logger.debug("  sc_fast: jit_kernel %.3fs", t2 - t1)
+    t2 = time.time(); logger.debug("  sc_fast: jit_kernel %.3fs", t2 - t1)
 
     if dovar:
         vData = vData64.astype(np.float32)
 
     cRdata_out = cRdata64.astype(np.float32)
     mRData_out = mRData64
-    # t3 = time.time(); logger.debug("  sc_fast: post %.3fs total %.3fs", t3 - t2, t3 - t0)
+    t3 = time.time(); logger.debug("  sc_fast: post %.3fs total %.3fs", t3 - t2, t3 - t0)
     return vData, cRdata_out, mRData_out
 
 def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, saYss,
@@ -1768,6 +1773,7 @@ def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, s
     #                        nCompTotal, verbose, forceConvolve, figMerit,
     #                        kerSigReject, statSig, fwKSStamp, hwKSStamp,
     #                        rPixX, rPixY, fwKernel, kernel_vec, mRData):
+    logger.debug("  check_stamps: entering nS=%d forceConvolve=%s figMerit=%s", nS, forceConvolve, figMerit)
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
@@ -1982,6 +1988,9 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
     #                       nCompKer, kerOrder, bgOrder, ngauss, deg_fixe,
     #                       hwKernel, fwKernel, usePCA, filter_x, filter_y,
     #                       PCA, fillVal):
+    import time
+    t0 = time.time()
+    logger.debug("  check_again: entering nS=%d figMerit=%s", nS, figMerit)
     ss = np.zeros(nS, dtype=np.float32)
     nss = 0
 
@@ -2147,6 +2156,8 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
             else:
                 scnt += 1
 
+    logger.debug("  check_again: done %.3fs check=%d meansig=%.4f scatter=%.4f skipped=%d refills=%d",
+                 time.time() - t0, check, meansigSubstamps, scatterSubstamps, nskippedSubstamps, len(refill_indices))
     return {
         'check': check,
         'meansigSubstamps': meansigSubstamps,
@@ -2187,6 +2198,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     nKSStamps  = sa.nKSStamps
 
     # pre-compute shared data for all fill_stamp calls
+    logger.debug("  fitKernel: pre-computing shared data nS=%d nvec=%d", nS, nvec)
     img_flat_shared = np.asarray(imConv, dtype=np.float64).ravel()
     imRef_flat_shared = np.asarray(imRef, dtype=np.float64).ravel()
 

@@ -348,6 +348,7 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         mRData_2d[nan_y + y0Reg, nan_x + x0Reg] |= (FLAG_INPUT_ISBAD | FLAG_ISNAN)
 
     sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
+    logger.debug("[stats3] mask applied %d/%d pixels, sdat=%d", (~skip_all).sum(), ntotal, len(sdat))
     if len(sdat) == 0:
         mode_val = 0.0
         if nfound > 0:
@@ -356,6 +357,7 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
                 'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
 
     mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat, maxiter, statSig)
+    logger.debug("[stats3] sigma_clip mean=%.4f sd=%.4f rc=%d", mean_val, sd_val, sc_rc)
     if sc_rc != 0:
         return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
                 'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
@@ -381,13 +383,17 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 1}
 
         if len(sdat_clipped) == 0:
-            mode_val = work[int(mfstat * nfound)]
+            mode_val = 0.0
+            if nfound > 0:
+                mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
             return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 2}
 
         if current_binsize == 0.0:
-            mode_val = work[int(mfstat * nfound)]
+            mode_val = 0.0
+            if nfound > 0:
+                mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
             return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
                     'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 3}
@@ -453,6 +459,8 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
     lfwhm_val = current_binsize * (median_val - lower_val) * 2.0 / 1.35
     median_val = current_bin1 + current_binsize * (median_val - 1.0)
 
+    logger.debug("[stats3] done mean=%.4f median=%.4f mode=%.4f sd=%.4f fwhm=%.4f lfwhm=%.4f",
+                 mean_val, median_val, mode_val, sd_val, fwhm_val, lfwhm_val)
     return {'sum': ssum_val, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
             'sd': sd_val, 'fwhm': fwhm_val, 'lfwhm': lfwhm_val, 'return_code': 0}
 
@@ -600,6 +608,7 @@ def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
                            nKSStamps, hwKSStamp, rPixX, mRData, kerFitThresh,
                            verbose=0):
     kerFitThresh = float(np.float32(kerFitThresh))
+    logger.debug("  psf_centers: si=%d nss=%d nKS=%d hwKS=%d", si, sa.nss[si], nKSStamps, hwKSStamp)
     dfrac = 0.9
 
     if sa.nss[si] >= nKSStamps:
@@ -918,7 +927,10 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                       verbose, forceConvolve, rPixX, rPixY,
                       tUKThresh, iUKThresh, hwKSStamp,
                       fwStamp, nKSStamps, kerFitThresh,
-                      mRData1d, statSig, logger=None):
+                       mRData1d, statSig):
+    logger.debug("  build_stamps: niS=%d ntS=%d sXMin=%d sYMin=%d sPix=%dx%d fc=%s getCenters=%d",
+                 niS, ntS, sXMin, sYMin, sXMax - sXMin + 1, sYMax - sYMin + 1,
+                 forceConvolve, getCenters)
     sPixX = sXMax - sXMin + 1
     sPixY = sYMax - sYMin + 1
 
