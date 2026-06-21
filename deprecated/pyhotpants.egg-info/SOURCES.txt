@@ -1,0 +1,15 @@
+COPYING
+LICENSE
+README.md
+chotpants.c
+setup.py
+csrc/alard.c
+csrc/functions.c
+csrc/functions.h
+csrc/hotpants_compute.c
+csrc/hotpants_compute.h
+csrc/hotpants_globals.h
+pyhotpants.egg-info/PKG-INFO
+pyhotpants.egg-info/SOURCES.txt
+pyhotpants.egg-info/dependency_links.txt
+pyhotpants.egg-info/top_level.txt

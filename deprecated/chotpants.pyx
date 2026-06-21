@@ -1,10 +1,19 @@
-import numpy as np
-cimport numpy as np
-from libc.stdlib cimport malloc, free, calloc
-from libc.string cimport memset, strncmp, memcpy
-import os, struct
-
-np.import_array()
+# ====== DEPRECATED ======
+# 此文件（chotpants.pyx）已弃用，所有功能已迁移至 numutils.py
+# region_setup_numpy → numutils.py
+# hotpants           → numutils.py
+# compute_ctx_info   → numutils.py (替代 C hotpants_init)
+# 导入路径已从 __init__.py 改为 from .numutils import hotpants
+# 不再需要 Cython 编译，setup.py 也已弃用
+# ====== DEPRECATED ======
+#
+# import numpy as np
+# cimport numpy as np
+# from libc.stdlib cimport malloc, free, calloc
+# from libc.string cimport memset, strncmp, memcpy
+# import os, struct
+#
+# np.import_array()
 
 def region_setup_numpy(tmpl_2d, sci_2d, tnoise_2d, inoise_2d, tmask_2d, imask_2d,
                         ri, rxmins_np, rxmaxs_np, rymins_np, rymaxs_np, nR,

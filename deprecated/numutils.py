@@ -1,8 +1,211 @@
+# ====== DEPRECATED ======
+# 此文件已拆分为三个模块：
+#   - functions.py : 常量、工具函数、数据容器类
+#   - alard.py     : Alard 核拟合、空间卷积、显著性评估核心算法
+#   - hotpants.py  : 主入口 + 6 个 region_* 调度函数
+# 导入方式：from pyhotpants import hotpants
+# 内部引用：from .functions import ... / from .alard import ...
+# ====== DEPRECATED ======
+#
 import numpy as np
 import numba
 import math
 import logging
 logger = logging.getLogger('hotpants')
+
+def compute_ctx_info(hwKernel, ngauss, deg_fixe, sigma_gauss,
+                     kerOrder, bgOrder,
+                     nStampX_in, nStampY_in, nKSStamps, hwKSStamp,
+                     useFullSS, kerFitThresh, kcStep_in,
+                     tNx, tNy, iNx, iNy, nR):
+    import numpy as np
+    nCompKer = 0
+    for i in range(ngauss):
+        nCompKer += ((deg_fixe[i] + 1) * (deg_fixe[i] + 2)) // 2
+
+    nComp      = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    nC         = nCompKer + 2
+    nCompBG    = (nCompKer - 1) * nComp + 1
+    nBGVectors = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    nCompTotal = nCompKer * nComp + nBGVectors
+
+    fwKernel   = hwKernel * 2 + 1
+    nStampX    = nStampX_in
+    nStampY    = nStampY_in
+
+    if useFullSS:
+        fwKSStamp = fwKernel
+        fwStamp   = fwKernel
+        nStampX   = int(min(tNx, iNx) / nR / fwStamp)
+        nStampY   = int(min(tNy, iNy) / nR / fwStamp)
+    else:
+        fwKSStamp = hwKSStamp * 2 + 1
+        fwStamp = min(min(tNx, iNx) // int(np.sqrt(nR)) // nStampX,
+                        min(tNy, iNy) // int(np.sqrt(nR)) // nStampY)
+        fwStamp -= fwKernel
+        if fwStamp % 2 == 0:
+            fwStamp -= 1
+
+        if fwStamp < fwKSStamp:
+            fwStamp  = fwKSStamp + fwKernel
+            if fwStamp % 2 == 0:
+                fwStamp -= 1
+            nStampX = min(tNx, iNx) // int(np.sqrt(nR)) // fwStamp
+            nStampY = min(tNy, iNy) // int(np.sqrt(nR)) // fwStamp
+
+    kcStep  = kcStep_in if kcStep_in else fwKernel
+    nStamps = nStampX * nStampY
+    sBorder = hwKSStamp + hwKernel
+
+    xMin = 0
+    yMin = 0
+    xMax = min(tNx, iNx) - 1
+    yMax = min(tNy, iNy) - 1
+    fitThresh = kerFitThresh
+
+    return {
+        'nCompKer': nCompKer, 'nComp': nComp, 'nC': nC,
+        'nCompBG': nCompBG, 'nBGVectors': nBGVectors, 'nCompTotal': nCompTotal,
+        'fwKernel': fwKernel, 'fwStamp': fwStamp, 'fwKSStamp': fwKSStamp,
+        'sBorder': sBorder, 'nStamps': nStamps,
+        'nStampX': nStampX, 'nStampY': nStampY,
+        'xMin': xMin, 'yMin': yMin, 'xMax': xMax, 'yMax': yMax,
+        'fitThresh': fitThresh, 'kcStep': kcStep,
+    }
+
+def region_setup_numpy(tmpl_2d, sci_2d, tnoise_2d, inoise_2d, tmask_2d, imask_2d,
+                        ri, rxmins_np, rxmaxs_np, rymins_np, rymaxs_np, nR,
+                        hwKernel, fwStamp, sBorder,
+                        xMin, yMin, xMax, yMax,
+                        fillVal, fillValNoise,
+                        tPedestal, iPedestal,
+                        tGain, tRdnoise, iGain, iRdnoise,
+                        tUThresh, tLThresh, iUThresh, iLThresh,
+                        kfSpreadMask1):
+    rXMin = int(rxmins_np[ri])
+    rXMax = int(rxmaxs_np[ri])
+    rYMin = int(rymins_np[ri])
+    rYMax = int(rymaxs_np[ri])
+
+    fwStamp = int(fwStamp)
+    hwKernel = int(hwKernel)
+    sBorder = int(sBorder)
+    xMin = int(xMin); yMin = int(yMin); xMax = int(xMax); yMax = int(yMax)
+
+    if nR > 1:
+        rXBMin = max(xMin, rXMin - fwStamp // 2)
+        rYBMin = max(yMin, rYMin - fwStamp // 2)
+        rXBMax = min(xMax, rXMax + fwStamp // 2)
+        rYBMax = min(yMax, rYMax + fwStamp // 2)
+    else:
+        rXBMin = max(xMin, rXMin - hwKernel)
+        rYBMin = max(yMin, rYMin - hwKernel)
+        rXBMax = min(xMax, rXMax + hwKernel)
+        rYBMax = min(yMax, rYMax + hwKernel)
+
+    rPixX = rXBMax - rXBMin + 1
+    rPixY = rYBMax - rYBMin + 1
+
+    fillVal_f = np.float32(fillVal)
+    fillValNoise_f = np.float32(fillValNoise)
+
+    tRData_py = np.full((rPixY, rPixX), fillVal_f, dtype=np.float32)
+    iRData_py = np.full((rPixY, rPixX), fillVal_f, dtype=np.float32)
+    oRData_py = np.full((rPixY, rPixX), fillValNoise_f, dtype=np.float32)
+    eRData_py = np.full((rPixY, rPixX), fillValNoise_f, dtype=np.float32)
+    mRData_py = np.zeros((rPixY, rPixX), dtype=np.int32)
+    misRData_py = np.zeros((rPixY, rPixX), dtype=np.int32)
+    mtsRData_py = np.zeros((rPixY, rPixX), dtype=np.int32)
+
+    tRData_py[:, :] = tmpl_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+    iRData_py[:, :] = sci_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+
+    tPedestal_f = np.float32(tPedestal)
+    iPedestal_f = np.float32(iPedestal)
+    if tPedestal_f != 0. or iPedestal_f != 0.:
+        tRData_py -= tPedestal_f
+        iRData_py -= iPedestal_f
+
+    if inoise_2d is not None:
+        oRData_py[:, :] = inoise_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        oRData_py *= oRData_py
+    else:
+        invGain_f = np.float32(1.0 / float(iGain))
+        quad_f = np.float32(float(iRdnoise) / float(iGain))
+        qquad = np.float64(quad_f) * np.float64(quad_f)
+        oRData_py = (np.abs(iRData_py.astype(np.float64)) * np.float64(invGain_f) + qquad).astype(np.float32)
+
+    if tnoise_2d is not None:
+        eRData_py[:, :] = tnoise_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        eRData_py *= eRData_py
+    else:
+        invGain_t = np.float32(1.0 / float(tGain))
+        quad_t = np.float32(float(tRdnoise) / float(tGain))
+        qquad_t = np.float64(quad_t) * np.float64(quad_t)
+        eRData_py = (np.abs(tRData_py.astype(np.float64)) * np.float64(invGain_t) + qquad_t).astype(np.float32)
+
+    oRData_py += eRData_py
+
+    if imask_2d is not None:
+        misRData_py[:, :] = imask_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        misRData_py |= np.int32(0x20) * (misRData_py > 0).astype(np.int32)
+        mRData_py |= misRData_py
+
+    if tmask_2d is not None:
+        mtsRData_py[:, :] = tmask_2d[rYBMin:rYBMax+1, rXBMin:rXBMax+1]
+        mtsRData_py |= np.int32(0x20) * (mtsRData_py > 0).astype(np.int32)
+        mRData_py |= mtsRData_py
+
+    tUThresh_f = np.float32(tUThresh)
+    tLThresh_f = np.float32(tLThresh)
+    iUThresh_f = np.float32(iUThresh)
+    iLThresh_f = np.float32(iLThresh)
+    mRData_py |= np.int32(0x80 | 0x01) * ((tRData_py == fillVal_f) | (iRData_py == fillVal_f)).astype(np.int32)
+    mRData_py |= np.int32(0x80 | 0x02) * ((tRData_py >= tUThresh_f) | (iRData_py >= iUThresh_f)).astype(np.int32)
+    mRData_py |= np.int32(0x80 | 0x04) * ((tRData_py <= tLThresh_f) | (iRData_py <= iLThresh_f)).astype(np.int32)
+
+    width = int(hwKernel * float(kfSpreadMask1))
+    if width > 0:
+        w2 = width // 2
+        bad = (mRData_py & 0x80) != 0
+        spread = np.zeros((rPixY, rPixX), dtype=np.bool_)
+        for dy in range(-w2, w2 + 1):
+            for dx in range(-w2, w2 + 1):
+                shifted = np.zeros((rPixY, rPixX), dtype=np.bool_)
+                sy1, sy2 = max(0, -dy), min(rPixY, rPixY - dy)
+                dy1_s, dy2_s = max(0, dy), min(rPixY, rPixY + dy)
+                sx1, sx2 = max(0, -dx), min(rPixX, rPixX - dx)
+                dx1_s, dx2_s = max(0, dx), min(rPixX, rPixX + dx)
+                shifted[dy1_s:dy2_s, dx1_s:dx2_s] = bad[sy1:sy2, sx1:sx2]
+                spread |= shifted
+        mRData_py[spread & ~bad] |= np.int32(0x40)
+
+    if sBorder > 0:
+        mRData_py[:, :sBorder] |= np.int32(0x100 | 0x400)
+        mRData_py[:, rPixX-sBorder:] |= np.int32(0x100 | 0x400)
+        mRData_py[:sBorder, sBorder:rPixX-sBorder] |= np.int32(0x100 | 0x400)
+        mRData_py[rPixY-sBorder:, sBorder:rPixX-sBorder] |= np.int32(0x100 | 0x400)
+
+    xBufLo = rXMin - rXBMin
+    xBufHi = rXBMax - rXMax
+    yBufLo = rYMin - rYBMin
+    yBufHi = rYBMax - rYMax
+    fpixelOutX = rXBMin + xBufLo + 1
+    fpixelOutY = rYBMin + yBufLo + 1
+    lpixelOutX = fpixelOutX + (rPixX - xBufHi - xBufLo - 1)
+    lpixelOutY = fpixelOutY + (rPixY - yBufHi - yBufLo - 1)
+
+    return {
+        'tRData': tRData_py, 'iRData': iRData_py,
+        'oRData': oRData_py, 'eRData': eRData_py,
+        'mRData': mRData_py, 'misRData': misRData_py, 'mtsRData': mtsRData_py,
+        'rXMin': rXMin, 'rYMin': rYMin, 'rXMax': rXMax, 'rYMax': rYMax,
+        'rXBMin': rXBMin, 'rYBMin': rYBMin, 'rXBMax': rXBMax, 'rYBMax': rYBMax,
+        'xBufLo': xBufLo, 'xBufHi': xBufHi, 'yBufLo': yBufLo, 'yBufHi': yBufHi,
+        'fpixelOutX': fpixelOutX, 'fpixelOutY': fpixelOutY,
+        'lpixelOutX': lpixelOutX, 'lpixelOutY': lpixelOutY,
+        'rPixX': rPixX, 'rPixY': rPixY,
+    }
 
 ZEROVAL = 1e-10
 MAXVAL = 1e10
@@ -6259,3 +6462,297 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
 
     logger.debug("[region %d] region_output_numpy done", region_idx)
     return stats
+
+def hotpants(
+    inim, tmplim,
+    tni=None, ini=None, tmi=None, imi=None,
+    tu=25000., tuk=None, tl=0., tg=1., tr=0., tp=0.,
+    iu=25000., iuk=None, il=0., ig=1., ir=0., ip=0.,
+    r=10, ko=2, bgo=1,
+    ng=3, ng_deg=None, ng_sig=None,
+    pca=None,
+    nrx=1, nry=1, rf=None,
+    nsx=10, nsy=10, ssf=None, afssc=1, nss=3, rss=15,
+    ft=20.0, sft=0.5, nft=0.1,
+    ssig=3.0, ks=2.0, kfm=0.99,
+    mins=1.0, mous=1.0,
+    fi=1e-30, fin=0.,
+    c='b', n='t', fom='v',
+    sconv=0, okn=0, convvar=0,
+    v=1, kcs=0,
+    uss=0, savexy=0,
+    dump_dir=None,
+):
+    import sys, os, struct, copy
+    import time as tm
+    logging.basicConfig(format='%(asctime)s.%(msecs)03d %(message)s', datefmt='%H:%M:%S', level=logging.DEBUG, stream=sys.stderr)
+    if ng_deg is None:
+        ng_deg = [6, 4, 2]
+    if ng_sig is None:
+        ng_sig = [0.7, 1.5, 3.0]
+
+    tmpl_arr = np.ascontiguousarray(tmplim, dtype=np.float32)
+    sci_arr = np.ascontiguousarray(inim, dtype=np.float32)
+    tNx = tmpl_arr.shape[1]
+    tNy = tmpl_arr.shape[0]
+    iNx = sci_arr.shape[1]
+    iNy = sci_arr.shape[0]
+
+    tni_arr = None
+    if tni is not None:
+        tni_arr = np.ascontiguousarray(tni, dtype=np.float32)
+
+    ini_arr = None
+    if ini is not None:
+        ini_arr = np.ascontiguousarray(ini, dtype=np.float32)
+
+    tmi_arr = None
+    if tmi is not None:
+        tmi_arr = np.ascontiguousarray(tmi, dtype=np.int32)
+
+    imi_arr = None
+    if imi is not None:
+        imi_arr = np.ascontiguousarray(imi, dtype=np.int32)
+
+    tuk_val = float(tu) if tuk is None else float(tuk)
+    iuk_val = float(iu) if iuk is None else float(iuk)
+
+    sig_arr = np.array([1.0 / (2.0 * s * s) for s in ng_sig], dtype=np.float32)
+    deg_arr = np.array(ng_deg, dtype=np.int32)
+
+    use_pca = 0
+    pca_arrs = []
+    if pca is not None:
+        use_pca = 1
+        pca_ng = len(pca)
+        pca_arrs = [np.ascontiguousarray(pca[pi], dtype=np.float32) for pi in range(pca_ng)]
+        r = pca[0].shape[0] // 2
+        deg_arr = np.zeros(pca_ng, dtype=np.int32)
+        sig_arr = np.full(pca_ng, -1.0, dtype=np.float32)
+        ng = pca_ng
+
+    xMin = 0
+    yMin = 0
+    xMax = min(tNx, iNx) - 1
+    yMax = min(tNy, iNy) - 1
+
+    if rf is not None:
+        nR = len(rf)
+        rxmins = np.array([reg[0] for reg in rf], dtype=np.int32)
+        rxmaxs = np.array([reg[1] for reg in rf], dtype=np.int32)
+        rymins = np.array([reg[2] for reg in rf], dtype=np.int32)
+        rymaxs = np.array([reg[3] for reg in rf], dtype=np.int32)
+    else:
+        nR = nrx * nry
+        rxmins_l, rxmaxs_l, rymins_l, rymaxs_l = [], [], [], []
+        for j in range(nry):
+            for i in range(nrx):
+                rxmins_l.append(xMin + i * xMax // nrx)
+                rymins_l.append(yMin + j * yMax // nry)
+                rxmaxs_l.append(min((i + 1) * xMax // nrx, xMax))
+                rymaxs_l.append(min((j + 1) * yMax // nry, yMax))
+        rxmins = np.array(rxmins_l, dtype=np.int32)
+        rxmaxs = np.array(rxmaxs_l, dtype=np.int32)
+        rymins = np.array(rymins_l, dtype=np.int32)
+        rymaxs = np.array(rymaxs_l, dtype=np.int32)
+
+    xcmp_arr = None
+    ycmp_arr = None
+    ncmp = 0
+    if ssf is not None:
+        xcmp_arr = np.array([p[0] - 1 for p in ssf], dtype=np.float32)
+        ycmp_arr = np.array([p[1] - 1 for p in ssf], dtype=np.float32)
+        ncmp = len(ssf)
+
+    c_bytes = c.encode('ascii')
+    n_bytes = n.encode('ascii')
+    fom_bytes = fom.encode('ascii')
+
+    oNx = max(tNx, iNx)
+    oNy = max(tNy, iNy)
+    diff_out = np.full((oNy, oNx), float(fi), dtype=np.float32)
+    noise_out = np.full((oNy, oNx), float(fin), dtype=np.float32)
+    conv_out = np.full((oNy, oNx), float(fi), dtype=np.float32)
+    mask_out = np.zeros((oNy, oNx), dtype=np.int32)
+
+    if dump_dir is not None:
+        os.makedirs(dump_dir, exist_ok=True)
+        _path = os.path.join(dump_dir, "py_input.bin")
+        with open(_path, "wb") as _f:
+            def _de(nm, db):
+                nb = nm.encode('ascii')
+                _f.write(struct.pack('i', len(nb)))
+                _f.write(nb)
+                dl = len(db) if db else 0
+                _f.write(struct.pack('l', dl))
+                if dl > 0: _f.write(db)
+            def _di(nm, val): _de(nm, struct.pack('i', int(val)))
+            def _dl(nm, val): _de(nm, struct.pack('l', int(val)))
+            def _df(nm, val): _de(nm, struct.pack('f', float(val)))
+            def _ds(nm, s):
+                if s is None: _de(nm, None)
+                else: _de(nm, s.encode('ascii') + b'\x00')
+            _dl("tNx",tNx); _dl("tNy",tNy); _dl("iNx",iNx); _dl("iNy",iNy)
+            _dl("oNx",oNx); _dl("oNy",oNy)
+            _di("nR",nR); _di("hwKernel",r); _di("ngauss",ng)
+            _di("kerOrder",ko); _di("bgOrder",bgo)
+            _di("nStampX",nsx); _di("nStampY",nsy)
+            _di("nKSStamps",nss); _di("hwKSStamp",rss)
+            _di("useFullSS",uss); _di("findSSC",afssc)
+            _df("kerFitThresh",ft); _df("scaleFitThresh",sft)
+            _df("minFracGoodStamps",nft)
+            _df("statSig",ssig); _df("kerSigReject",ks); _df("kerFracMask",kfm)
+            _df("tUThresh",tu); _df("tLThresh",tl)
+            _df("tGain",tg); _df("tRdnoise",tr); _df("tPedestal",tp)
+            _df("iUThresh",iu); _df("iLThresh",il)
+            _df("iGain",ig); _df("iRdnoise",ir); _df("iPedestal",ip)
+            _df("tUKThresh",tuk_val); _df("iUKThresh",iuk_val)
+            _df("kfSpreadMask1",mins); _df("kfSpreadMask2",mous)
+            _df("fillVal",fi); _df("fillValNoise",fin)
+            _di("sameConv",sconv); _di("rescaleOK",okn)
+            _di("convolveVariance",convvar)
+            _di("usePCA",use_pca); _di("Ncmp",ncmp)
+            _di("verbose",v); _di("kcStep",kcs); _di("savexyflag",savexy)
+            _ds("forceConvolve",c); _ds("photNormalize",n); _ds("figMerit",fom)
+            _de("deg_fixe", bytes(np.ascontiguousarray(deg_arr)))
+            _de("sigma_gauss", bytes(np.ascontiguousarray(sig_arr)))
+            _de("tFullData", bytes(np.ascontiguousarray(tmpl_arr)))
+            _de("iFullData", bytes(np.ascontiguousarray(sci_arr)))
+            _de("tNoiseFullData", bytes(np.ascontiguousarray(tni_arr)) if tni_arr is not None else None)
+            _de("iNoiseFullData", bytes(np.ascontiguousarray(ini_arr)) if ini_arr is not None else None)
+            _de("tMaskFullData", bytes(np.ascontiguousarray(tmi_arr)) if tmi_arr is not None else None)
+            _de("iMaskFullData", bytes(np.ascontiguousarray(imi_arr)) if imi_arr is not None else None)
+            _de("rXMins", bytes(np.ascontiguousarray(rxmins)))
+            _de("rXMaxs", bytes(np.ascontiguousarray(rxmaxs)))
+            _de("rYMins", bytes(np.ascontiguousarray(rymins)))
+            _de("rYMaxs", bytes(np.ascontiguousarray(rymaxs)))
+            _de("xcmp", bytes(np.ascontiguousarray(xcmp_arr)) if ssf is not None else None)
+            _de("ycmp", bytes(np.ascontiguousarray(ycmp_arr)) if ssf is not None else None)
+            _de("diffOut", bytes(np.ascontiguousarray(diff_out)))
+            _de("noiseOut", bytes(np.ascontiguousarray(noise_out)))
+            _de("convOut", bytes(np.ascontiguousarray(conv_out)))
+            _de("maskOut", bytes(np.ascontiguousarray(mask_out)))
+
+    ctx_info = compute_ctx_info(
+        int(r), int(ng), deg_arr, sig_arr,
+        int(ko), int(bgo),
+        int(nsx), int(nsy), int(nss), int(rss),
+        int(uss), float(ft), int(kcs),
+        tNx, tNy, iNx, iNy, nR)
+
+    params_info = {
+        'hwKernel': int(r), 'ngauss': int(ng),
+        'deg_fixe': deg_arr, 'sigma_gauss': sig_arr,
+        'kerOrder': int(ko), 'bgOrder': int(bgo),
+        'hwKSStamp': int(rss), 'nKSStamps': int(nss),
+        'scaleFitThresh': float(sft), 'minFracGoodStamps': float(nft),
+        'tUKThresh': float(tuk_val), 'iUKThresh': float(iuk_val),
+        'tUThresh': float(tu), 'tLThresh': float(tl),
+        'tGain': float(tg), 'tRdnoise': float(tr),
+        'iUThresh': float(iu), 'iLThresh': float(il),
+        'iGain': float(ig), 'iRdnoise': float(ir),
+        'verbose': int(v), 'usePCA': int(use_pca),
+        'PCA': pca_arrs if use_pca else None,
+        'xcmp': np.asarray(xcmp_arr) if ssf is not None else None,
+        'ycmp': np.asarray(ycmp_arr) if ssf is not None else None,
+        'Ncmp': ncmp,
+        'statSig': float(ssig), 'kerSigReject': float(ks), 'kerFracMask': float(kfm),
+        'fillVal': float(fi), 'fillValNoise': float(fin),
+        'figMerit': fom, 'photNormalize': n,
+        'convolveVariance': int(convvar), 'sameConv': int(sconv),
+        'savexyflag': int(savexy), 'rescaleOK': int(okn),
+        'kfSpreadMask2': float(mous), 'findSSC': int(afssc),
+        'tNoiseFullData': tni_arr,
+        'iNoiseFullData': ini_arr,
+    }
+
+    localFC_py = c
+    stats_list_py = [None] * nR
+
+    for ri in range(nR):
+        t0 = tm.time()
+        py = region_setup_numpy(
+            tmpl_arr, sci_arr,
+            tni_arr, ini_arr, tmi_arr, imi_arr,
+            ri, rxmins, rxmaxs, rymins, rymaxs, nR,
+            r, ctx_info['fwStamp'], ctx_info['sBorder'],
+            ctx_info['xMin'], ctx_info['yMin'], ctx_info['xMax'], ctx_info['yMax'],
+            fi, fin,
+            tp, ip,
+            tg, tr, ig, ir,
+            tu, tl, iu, il,
+            mins)
+        sys.stderr.write(f"  [{ri}] setup: {tm.time()-t0:.3f}s\n"); sys.stderr.flush()
+
+        t1 = tm.time()
+        bs_result = region_buildstamps_numpy(py, ctx_info, params_info, localFC_py)
+        sys.stderr.write(f"  [{ri}] buildstamps: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        if bs_result['status'] != 0:
+            continue
+
+        t1 = tm.time()
+        fit_result = region_fit_numpy(bs_result, py, ctx_info, params_info, localFC_py)
+        sys.stderr.write(f"  [{ri}] fit: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+
+        t1 = tm.time()
+        conv_result = region_convolve_diff_numpy(
+            fit_result, py, bs_result, ctx_info, params_info, ri, localFC_py)
+        sys.stderr.write(f"  [{ri}] convolve_diff: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        localFC_py = conv_result.get('localForceConvolve', localFC_py)
+
+        t1 = tm.time()
+        stats_entry = region_output_numpy(
+            conv_result, py, fit_result,
+            diff_out, noise_out, conv_out, mask_out,
+            ctx_info, params_info, ri, None)
+        sys.stderr.write(f"  [{ri}] output: {tm.time()-t1:.3f}s\n"); sys.stderr.flush()
+        stats_list_py[ri] = stats_entry
+
+    if dump_dir is not None:
+        _opath = os.path.join(dump_dir, "py_output.bin")
+        with open(_opath, "wb") as _f:
+            def _de2(nm, db):
+                nb = nm.encode('ascii')
+                _f.write(struct.pack('i', len(nb)))
+                _f.write(nb)
+                dl2 = len(db) if db else 0
+                _f.write(struct.pack('l', dl2))
+                if dl2 > 0: _f.write(db)
+            _de2("diffOut", bytes(np.ascontiguousarray(diff_out)))
+            _de2("noiseOut", bytes(np.ascontiguousarray(noise_out)))
+            _de2("convOut", bytes(np.ascontiguousarray(conv_out)))
+            _de2("maskOut", bytes(np.ascontiguousarray(mask_out)))
+
+    stats_list = []
+    for si in range(nR):
+        if stats_list_py[si] is not None:
+            entry = stats_list_py[si]
+            stats_list.append({
+                'conv_tmpl': entry['convTmpl'],
+                'sum_kernel': entry['sumKernel'],
+                'mean_sig': entry['meansigSubstamps'],
+                'scatter_sig': entry['scatterSubstamps'],
+                'final_mean_sig': entry['meansigSubstampsF'],
+                'final_scatter_sig': entry['scatterSubstampsF'],
+                'x2norm': entry['x2norm'],
+                'nx2norm': entry['nx2norm'],
+                'diff_mean': entry['mean'],
+                'diff_sd': entry['sd'],
+                'noise_mean': entry['nmean'],
+                'diff_mean_ok': entry['meanm'],
+                'diff_sd_ok': entry['sdm'],
+                'noise_mean_ok': entry['nmeanm'],
+                'diffrat': entry['diffrat'],
+            })
+        else:
+            stats_list.append({
+                'conv_tmpl': 0, 'sum_kernel': 0.0,
+                'mean_sig': 0.0, 'scatter_sig': 0.0,
+                'final_mean_sig': 0.0, 'final_scatter_sig': 0.0,
+                'x2norm': 0.0, 'nx2norm': 0,
+                'diff_mean': 0.0, 'diff_sd': 0.0, 'noise_mean': 0.0,
+                'diff_mean_ok': 0.0, 'diff_sd_ok': 0.0, 'noise_mean_ok': 0.0,
+                'diffrat': 0.0,
+            })
+
+    return diff_out, noise_out, conv_out, mask_out, stats_list

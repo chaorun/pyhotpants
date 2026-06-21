@@ -129,19 +129,33 @@
 | background | 0.12s | 已 jit |
 | noise_combine | 0.02s | 已矢量化 |
 
-### 关键代码位置 (numutils.py)
+### 关键代码位置（拆分后）
 
-| 函数 | 行号 | 作用 |
-|------|------|------|
-| `buildStampsNumba` | ~1507 | 扁平参数 buildstamps |
-| `psfCentersJit` | ~1436 | @jit while循环 |
-| `fill_stamp_numba_kernel` | ~2766 | @jit 5步合并 |
-| `spatial_convolve_fast_numpy` | ~4044 | conv_diff 主函数 |
-| `spatial_convolve_jit_kernel` | ~3660 | @jit parallel C翻译版 |
-| `check_psf_center_numba` | ~750 | @jit |
-| `get_stamp_sig_batch_jit` | ~3130 | @jit 批量sig |
-| `get_noise_stats3_numpy` | ~220 | @jit 逐像素for |
-| `background_loop_jit` | ~1807 | @jit |
+| 文件 | 行号 | 函数 | 作用 |
+|------|------|------|------|
+| `functions.py` | 821 | `buildStampsNumba` | 扁平参数 buildstamps |
+| `functions.py` | 739 | `psfCentersJit` | @jit while循环 |
+| `functions.py` | 487 | `check_psf_center_numba` | @jit |
+| `functions.py` | 179 | `get_noise_stats3_numpy` | @jit 逐像素for |
+| `functions.py` | 135 | `sigma_clip_numpy` | sigma-clip |
+| `functions.py` | 271 | `get_stamp_stats3_numpy` | stamp统计 |
+| `alard.py` | 626 | `fill_stamp_numba_kernel` | @jit 5步合并 |
+| `alard.py` | 42 | `background_loop_jit` | @jit |
+| `alard.py` | 314 | `build_matrix0_jit` | @jit 单stamp矩阵 |
+| `alard.py` | 338 | `build_matrix_jit` | @jit 多stamp合并矩阵 |
+| `alard.py` | 409 | `build_scprod0_jit` | @jit 单stamp scprod |
+| `alard.py` | 428 | `build_scprod_jit` | @jit 多stamp合并scprod |
+| `alard.py` | 928 | `get_stamp_sig_batch_jit` | @jit 批量sig |
+| `alard.py` | 2021 | `fit_kernel_numpy` | fit主循环 |
+| `alard.py` | 1663 | `check_stamps_numpy` | stamp质量检验 |
+| `alard.py` | 1874 | `check_again_numpy` | 迭代拒绝 |
+| `alard.py` | 1385 | `spatial_convolve_jit_kernel` | @jit parallel 核心 |
+| `alard.py` | 1619 | `spatial_convolve_fast_numpy` | conv_diff 主函数 |
+| `hotpants.py` | 5001 | `region_buildstamps_numpy` | region构建 |
+| `hotpants.py` | 5510 | `region_fit_numpy` | region拟合 |
+| `hotpants.py` | 5696 | `region_convolve_diff_numpy` | region卷积 |
+| `hotpants.py` | 6171 | `region_output_numpy` | region输出 |
+| `hotpants.py` | 6487 | `hotpants` | 主入口 |
 
 ### 精度基线
 
@@ -153,43 +167,9 @@
 ### 测试命令
 
 ```bash
-# 1K 精度 + 性能测试
+# 一键精度+性能回归测试
 cd /Users/chaorun/Code/Githubs/hotpants
-mkdir -p tmp/precision_test/py tmp/precision_test/c
-
-# C 版本
-raw_code/hotpants -inim testdata/input1K.fit -tmplim testdata/templ1K.fit \
-  -outim tmp/precision_test/c/out.fit \
-  -oni tmp/precision_test/c/n.fits \
-  -oci tmp/precision_test/c/c.fits \
-  -omi tmp/precision_test/c/m.fits \
-  -c t -n t -nsx 10 -nsy 10 -ko 2 -bgo 2 2>/dev/null
-
-# Python 版本
-python3 -u -c "
-import logging; logging.getLogger('numba').setLevel(logging.WARNING)
-from astropy.io import fits; import numpy as np
-from pyhotpants import hotpants
-tmpl = fits.getdata('testdata/templ1K.fit').astype(np.float32)
-sci = fits.getdata('testdata/input1K.fit').astype(np.float32)
-diff, noise, conv, mask, stats = hotpants(inim=sci, tmplim=tmpl, c='t', n='t', nsx=10, nsy=10, ko=2, bgo=2, v=0)
-fits.writeto('tmp/precision_test/py/out.fit', diff, overwrite=True)
-if noise is not None: fits.writeto('tmp/precision_test/py/n.fits', noise, overwrite=True)
-if conv is not None: fits.writeto('tmp/precision_test/py/c.fits', conv, overwrite=True)
-if mask is not None: fits.writeto('tmp/precision_test/py/m.fits', mask.astype(np.int32), overwrite=True)
-print('DONE')
-"
-
-# 精度对比
-python3 -c "
-from astropy.io import fits; import numpy as np
-for fname,desc in [('out.fit','diffOut'),('n.fits','noiseOut'),('c.fits','convOut'),('m.fits','maskOut')]:
-    d1=fits.getdata('tmp/precision_test/py/'+fname).astype(float)
-    d2=fits.getdata('tmp/precision_test/c/'+fname).astype(float)
-    diff=np.abs(d1-d2); n=int((diff>1e-15).sum()); ma=float(diff.max())
-    if n==0: print(desc+': EXACT MATCH')
-    else: print(desc+': {} differ, max_abs={:.2e}'.format(n, ma))
-"
+PYTHONPATH=. python3 examples/test_precision.py
 ```
 
 ### AGENTS.md 关键规则
