@@ -3019,20 +3019,20 @@ def make_model_numpy(sa, si, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKSSt
 #     return csModel
 
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, parallel=True)
 def fill_stamp_numba_kernel_local(
     image, imRef, filterX, filterY,
     xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
     rPixX, rPixY, nCompKer, kerOrder, bgOrder,
     nvec, renFlags_arr, fillVal, mRData1d, verbose,
-    out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val):
+    out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val,
+    n_stamps):
 
     LOCAL_FLAG_INPUT_ISBAD = 0x80
     fwSqStamp = fwKSStamp * fwKSStamp
     fwSqKernel = fwKernel * fwKernel
     nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
-# 
-    # ========== Step 1: inlined xy_conv_stamp_fast_numba_kernel ==========
+
     kernels = np.zeros((nvec, fwSqKernel), dtype=np.float64)
     for n in range(nvec):
         for jc in range(fwKernel):
@@ -3041,104 +3041,104 @@ def fill_stamp_numba_kernel_local(
                 fx_idx = fwKernel - 1 - ic
                 kernels[n, jc * fwKernel + ic] = filterY[n * fwKernel + fy_idx] * filterX[n * fwKernel + fx_idx]
 
-    for n in range(nvec):
-        for fsi in range(fwSqStamp):
-            out_vectors[n, fsi] = 0.0
-
-    for fsi in range(fwSqStamp):
-        fsi_x = fsi % fwKSStamp
-        fsi_y = fsi // fwKSStamp
-        img_base_x = xi - hwKSStamp + fsi_x - hwKernel
-        img_base_y = yi - hwKSStamp + fsi_y - hwKernel
-        for fki in range(fwSqKernel):
-            kx = fki % fwKernel
-            ky = fki // fwKernel
-            img_x = img_base_x + kx
-            img_y = img_base_y + ky
-            img_val = image[img_x + rPixX * img_y]
-            for n in range(nvec):
-                out_vectors[n, fsi] += kernels[n, fki] * img_val
-
-    for n in range(nvec):
-        if renFlags_arr[n]:
-            for fsi in range(fwSqStamp):
-                out_vectors[n, fsi] -= out_vectors[0, fsi]
+    for si in numba.prange(n_stamps):
+        xi_s = xi[si]
+        yi_s = yi[si]
 # 
-    # ========== Step 2: inlined cut_sstamp_numpy ==========
-    for fsi in range(fwSqStamp):
-        out_krefArea[fsi] = fillVal
+        for n in range(nvec):
+            for fsi in range(fwSqStamp):
+                out_vectors[si, n, fsi] = 0.0
 
-    sumVal = 0.0
-    for y_offset in range(fwKSStamp):
-        img_y = yi - hwKSStamp + y_offset
-        for x_offset in range(fwKSStamp):
-            img_x = xi - hwKSStamp + x_offset
-            k = img_x + rPixX * img_y
-            dpt = imRef[k]
-            out_krefArea[x_offset + y_offset * fwKSStamp] = dpt
-            if (mRData1d[k] & LOCAL_FLAG_INPUT_ISBAD) == 0:
-                sumVal += abs(dpt)
+        for fsi in range(fwSqStamp):
+            fsi_x = fsi % fwKSStamp
+            fsi_y = fsi // fwKSStamp
+            img_base_x = xi_s - hwKSStamp + fsi_x - hwKernel
+            img_base_y = yi_s - hwKSStamp + fsi_y - hwKernel
+            for fki in range(fwSqKernel):
+                kx = fki % fwKernel
+                ky = fki // fwKernel
+                img_x = img_base_x + kx
+                img_y = img_base_y + ky
+                img_val = image[img_x + rPixX * img_y]
+                for n in range(nvec):
+                    out_vectors[si, n, fsi] += kernels[n, fki] * img_val
 
-    out_sum_val[0] = sumVal
+        for n in range(nvec):
+            if renFlags_arr[n]:
+                for fsi in range(fwSqStamp):
+                    out_vectors[si, n, fsi] -= out_vectors[si, 0, fsi]
+# 
+        for fsi in range(fwSqStamp):
+            out_krefArea[si, fsi] = fillVal
 
-    # ========== Step 3: background vectors ==========
-    rPixX2 = np.float64(0.5 * rPixX)
-    rPixY2 = np.float64(0.5 * rPixY)
-    for y_offset in range(fwKSStamp):
-        j = yi - hwKSStamp + y_offset
-        yf = (j - rPixY2) / rPixY2
-        for x_offset in range(fwKSStamp):
-            i = xi - hwKSStamp + x_offset
-            xf = (i - rPixX2) / rPixX2
-            ipix = x_offset + y_offset * fwKSStamp
-            ax = 1.0
-            nv = nvec
-            for idegx in range(bgOrder + 1):
-                ay = 1.0
-                for idegy in range(bgOrder - idegx + 1):
-                    out_vectors[nv, ipix] = ax * ay
-                    ay *= yf
-                    nv += 1
-                ax *= xf
+        sumVal = 0.0
+        for y_offset in range(fwKSStamp):
+            img_y = yi_s - hwKSStamp + y_offset
+            for x_offset in range(fwKSStamp):
+                img_x = xi_s - hwKSStamp + x_offset
+                k = img_x + rPixX * img_y
+                dpt = imRef[k]
+                out_krefArea[si, x_offset + y_offset * fwKSStamp] = dpt
+                if (mRData1d[k] & LOCAL_FLAG_INPUT_ISBAD) == 0:
+                    sumVal += abs(dpt)
 
-    # ========== Step 4: inlined build_matrix0_jit ==========
-    ncomp1 = nCompKer
-    pixStamp = fwSqStamp
+        out_sum_val[si, 0] = sumVal
 
-    for i in range(ncomp1):
-        for j in range(i + 1):
-            q = 0.0
+        rPixX2 = np.float64(0.5 * rPixX)
+        rPixY2 = np.float64(0.5 * rPixY)
+        for y_offset in range(fwKSStamp):
+            j = yi_s - hwKSStamp + y_offset
+            yf = (j - rPixY2) / rPixY2
+            for x_offset in range(fwKSStamp):
+                i = xi_s - hwKSStamp + x_offset
+                xf = (i - rPixX2) / rPixX2
+                ipix = x_offset + y_offset * fwKSStamp
+                ax = 1.0
+                nv = nvec
+                for idegx in range(bgOrder + 1):
+                    ay = 1.0
+                    for idegy in range(bgOrder - idegx + 1):
+                        out_vectors[si, nv, ipix] = ax * ay
+                        ay *= yf
+                        nv += 1
+                    ax *= xf
+
+        ncomp1 = nCompKer
+        pixStamp = fwSqStamp
+
+        for i in range(ncomp1):
+            for j in range(i + 1):
+                q = 0.0
+                for k in range(pixStamp):
+                    q += out_vectors[si, i, k] * out_vectors[si, j, k]
+                out_mat[si, i + 1, j + 1] = q
+
+        ivecbg = ncomp1
+        for i1 in range(ncomp1):
+            p0 = 0.0
             for k in range(pixStamp):
-                q += out_vectors[i, k] * out_vectors[j, k]
-            out_mat[i + 1, j + 1] = q
+                p0 += out_vectors[si, i1, k] * out_vectors[si, ivecbg, k]
+            out_mat[si, ncomp1 + 1, i1 + 1] = p0
 
-    ivecbg = ncomp1
-    for i1 in range(ncomp1):
-        p0 = 0.0
+        q = 0.0
         for k in range(pixStamp):
-            p0 += out_vectors[i1, k] * out_vectors[ivecbg, k]
-        out_mat[ncomp1 + 1, i1 + 1] = p0
+            q += out_vectors[si, ivecbg, k] * out_vectors[si, ncomp1, k]
+        out_mat[si, ncomp1 + 1, ncomp1 + 1] = q
 
-    q = 0.0
-    for k in range(pixStamp):
-        q += out_vectors[ivecbg, k] * out_vectors[ncomp1, k]
-    out_mat[ncomp1 + 1, ncomp1 + 1] = q
+        for i1 in range(ncomp1):
+            p0 = 0.0
+            for xc in range(-hwKSStamp, hwKSStamp + 1):
+                for yc in range(-hwKSStamp, hwKSStamp + 1):
+                    k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
+                    p0 += out_vectors[si, i1, k] * out_krefArea[si, k]
+            out_scprod[si, i1 + 1] = p0
 
-    # ========== Step 5: inlined build_scprod0_jit ==========
-    for i1 in range(ncomp1):
-        p0 = 0.0
+        q = 0.0
         for xc in range(-hwKSStamp, hwKSStamp + 1):
             for yc in range(-hwKSStamp, hwKSStamp + 1):
                 k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-                p0 += out_vectors[i1, k] * out_krefArea[k]
-        out_scprod[i1 + 1] = p0
-
-    q = 0.0
-    for xc in range(-hwKSStamp, hwKSStamp + 1):
-        for yc in range(-hwKSStamp, hwKSStamp + 1):
-            k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-            q += out_vectors[ncomp1, k] * out_krefArea[k]
-    out_scprod[ncomp1 + 1] = q
+                q += out_vectors[si, ncomp1, k] * out_krefArea[si, k]
+        out_scprod[si, ncomp1 + 1] = q
 
     return 0
 
@@ -3149,7 +3149,9 @@ def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, s
     # def fill_stamp_numpy(stamp_dict, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
     #                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
     #                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
-    # rPixX2 = float(np.float32(0.5 * rPixX))
+    # 无效 stamp 快速返回
+    if saSscnt[si] >= saNss[si]:
+        return 1
     # rPixY2 = float(np.float32(0.5 * rPixY))
     #
     # # if stamp_dict['sscnt'] >= stamp_dict['nss']:
@@ -3251,21 +3253,19 @@ def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, s
     #
     # return 0
 
-    # ===== new: delegate to fill_stamp_numba =====
-    result = fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+    # ===== 批量调用 fill_stamp_numba =====
+    result = fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, [si], imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
                               hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
                               usePCA, filter_x, filter_y, PCA, fillVal, mRData)
-    if isinstance(result, int):
-        return result
     out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val = result
     nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
     fwSqStamp = fwKSStamp * fwKSStamp
     nC = nCompKer + 1
-    saVectors[si, :nCompKer + nbg, :fwSqStamp] = out_vectors
-    saKrefArea[si, :] = out_krefArea
-    saMat[si, :nC + 1, :nC + 1] = out_mat
-    saScprod[si, :nC + 1] = out_scprod
-    saSumVal[si] = out_sum_val
+    saVectors[si, :nCompKer + nbg, :fwSqStamp] = out_vectors[0]
+    saKrefArea[si, :] = out_krefArea[0]
+    saMat[si, :nC + 1, :nC + 1] = out_mat[0]
+    saScprod[si, :nC + 1] = out_scprod[0]
+    saSumVal[si] = out_sum_val[0]
     return 0
 
 
@@ -3328,19 +3328,13 @@ def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, s
 #     return 0
 
 
-def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
+def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si_list, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
-                     usePCA, filter_x, filter_y, PCA, fillVal, mRData,
-                     img_flat=None, imRef_flat=None, kernels_all=None):
-    # def fill_stamp_numba(sa, si, imConv, imRef, rPixX, rPixY, verbose, ngauss, deg_fixe,
-    #                      hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
-    #                      usePCA, filter_x, filter_y, PCA, fillVal, mRData):
-    if saSscnt[si] >= saNss[si]:
-        return 1
+                     usePCA, filter_x, filter_y, PCA, fillVal, mRData):
+    # si_list: 批次 stamp 索引列表
+    n_stamps = len(si_list)
 
-    # if usePCA:
-    #     return 1
-
+    # 预计算 renFlags
     nvec = 0
     renFlags = []
     for ig in range(ngauss):
@@ -3354,8 +3348,20 @@ def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef
                 renFlags.append(ren)
                 nvec += 1
 
-    xi = int(saXss[si, saSscnt[si]])
-    yi = int(saYss[si, saSscnt[si]])
+    # 收集所有有效 stamp 的 xi/yi（跳过 sscnt >= nss 的）
+    xi_arr = np.zeros(n_stamps, dtype=np.int32)
+    yi_arr = np.zeros(n_stamps, dtype=np.int32)
+    valid_mask = np.zeros(n_stamps, dtype=np.int32)
+    n_valid = 0
+    for idx in range(n_stamps):
+        si = si_list[idx]
+        if saSscnt[si] < saNss[si]:
+            xi_arr[n_valid] = int(saXss[si, saSscnt[si]])
+            yi_arr[n_valid] = int(saYss[si, saSscnt[si]])
+            valid_mask[idx] = 1
+            n_valid += 1
+    if n_valid == 0:
+        return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[:, 0]
 
     img_flat = np.asarray(imConv, dtype=np.float64).ravel()
     imRef_flat = np.asarray(imRef, dtype=np.float64).ravel()
@@ -3368,22 +3374,21 @@ def fill_stamp_numba(saXss, saYss, saSscnt, saNss, saX0, saY0, si, imConv, imRef
     fwSqStamp = fwKSStamp * fwKSStamp
     nC = nCompKer + 1
 
-    out_vectors = np.zeros((nvec + nbg, fwSqStamp), dtype=np.float64)
-    out_krefArea = np.zeros(fwSqStamp, dtype=np.float64)
-    out_mat = np.zeros((nC + 1, nC + 1), dtype=np.float64)
-    out_scprod = np.zeros(nC + 1, dtype=np.float64)
-    out_sum_val = np.zeros(1, dtype=np.float64)
-
-    logging.getLogger('hotpants').debug("fill_stamp_numba si=%d xi=%d yi=%d", si, xi, yi)
+    out_vectors = np.zeros((n_stamps, nvec + nbg, fwSqStamp), dtype=np.float64)
+    out_krefArea = np.zeros((n_stamps, fwSqStamp), dtype=np.float64)
+    out_mat = np.zeros((n_stamps, nC + 1, nC + 1), dtype=np.float64)
+    out_scprod = np.zeros((n_stamps, nC + 1), dtype=np.float64)
+    out_sum_val = np.zeros((n_stamps, 1), dtype=np.float64)
 
     fill_stamp_numba_kernel_local(
         img_flat, imRef_flat, fx, fy,
-        xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
+        xi_arr, yi_arr, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
         rPixX, rPixY, nCompKer, kerOrder, bgOrder,
         nvec, rflags, fillVal, mRData1d, verbose,
-        out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val)
+        out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val,
+        n_valid)
 
-    return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[0]
+    return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[:, 0]
 
 
 @numba.jit(nopython=True)
@@ -5934,18 +5939,26 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     logger.info("Filling Template sub-stamps")
     if localForceConvolve != "i":
         for k in range(ntS):
-            # ctStamps[k]['sscnt'] = 0
             ctSa['sscnt'][k] = 0
-            # fill_stamp_numpy(ctStamps[k], tRData1d, iRData1d,
-            #                  rPixX, rPixY, verbose, ngauss, deg_fixe,
-            #                  hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-            #                  bgOrder, nCompKer, kerOrder, usePCA,
-            #                  filter_x, filter_y, PCA, fillVal, mRData1d)
-            fill_stamp_numpy(ctVectors, ctMat, ctScprod, ctXss, ctYss, ctSscnt, ctNss, ctKrefArea, ctSumVal, ctX0, ctY0, k, tRData1d, iRData1d,
-                             rPixX, rPixY, verbose, ngauss, deg_fixe,
-                             hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                             bgOrder, nCompKer, kerOrder, usePCA,
-                             filter_x, filter_y, PCA, fillVal, mRData1d)
+        # 批量收集有效 stamp 索引
+        ct_si_list = [k for k in range(ntS) if ctSscnt[k] < ctNss[k]]
+        if ct_si_list:
+            # 批量调用 fill_stamp_numba
+            ct_out = fill_stamp_numba(ctXss, ctYss, ctSscnt, ctNss, ctX0, ctY0, ct_si_list,
+                                       tRData1d, iRData1d, rPixX, rPixY, verbose, ngauss, deg_fixe,
+                                       hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+                                       usePCA, filter_x, filter_y, PCA, fillVal, mRData1d)
+            ct_out_v, ct_out_k, ct_out_m, ct_out_s, ct_out_sum = ct_out
+            # 写回每个 stamp
+            _nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+            _fwSq = fwKSStamp * fwKSStamp
+            _nC = nCompKer + 1
+            for bi, si in enumerate(ct_si_list):
+                ctVectors[si, :nCompKer + _nbg, :_fwSq] = ct_out_v[bi]
+                ctKrefArea[si, :] = ct_out_k[bi]
+                ctMat[si, :_nC + 1, :_nC + 1] = ct_out_m[bi]
+                ctScprod[si, :_nC + 1] = ct_out_s[bi]
+                ctSumVal[si] = ct_out_sum[bi]
         if localForceConvolve == "b":
             logger.info("Trying to convolve the TEMPLATE to fit IMAGE")
             # tMerit = check_stamps_numpy(
@@ -5975,18 +5988,24 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     logger.info("Filling Image sub-stamps")
     if localForceConvolve != "t":
         for k in range(niS):
-            # ciStamps[k]['sscnt'] = 0
             ciSa['sscnt'][k] = 0
-            # fill_stamp_numpy(ciStamps[k], iRData1d, tRData1d,
-            #                  rPixX, rPixY, verbose, ngauss, deg_fixe,
-            #                  hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-            #                  bgOrder, nCompKer, kerOrder, usePCA,
-            #                  filter_x, filter_y, PCA, fillVal, mRData1d)
-            fill_stamp_numpy(ciVectors, ciMat, ciScprod, ciXss, ciYss, ciSscnt, ciNss, ciKrefArea, ciSumVal, ciX0, ciY0, k, iRData1d, tRData1d,
-                             rPixX, rPixY, verbose, ngauss, deg_fixe,
-                             hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                             bgOrder, nCompKer, kerOrder, usePCA,
-                             filter_x, filter_y, PCA, fillVal, mRData1d)
+        # 批量收集有效 stamp 索引
+        ci_si_list = [k for k in range(niS) if ciSscnt[k] < ciNss[k]]
+        if ci_si_list:
+            ci_out = fill_stamp_numba(ciXss, ciYss, ciSscnt, ciNss, ciX0, ciY0, ci_si_list,
+                                       iRData1d, tRData1d, rPixX, rPixY, verbose, ngauss, deg_fixe,
+                                       hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer, kerOrder,
+                                       usePCA, filter_x, filter_y, PCA, fillVal, mRData1d)
+            ci_out_v, ci_out_k, ci_out_m, ci_out_s, ci_out_sum = ci_out
+            _nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+            _fwSq = fwKSStamp * fwKSStamp
+            _nC = nCompKer + 1
+            for bi, si in enumerate(ci_si_list):
+                ciVectors[si, :nCompKer + _nbg, :_fwSq] = ci_out_v[bi]
+                ciKrefArea[si, :] = ci_out_k[bi]
+                ciMat[si, :_nC + 1, :_nC + 1] = ci_out_m[bi]
+                ciScprod[si, :_nC + 1] = ci_out_s[bi]
+                ciSumVal[si] = ci_out_sum[bi]
         if localForceConvolve == "b":
             logger.info("Trying to convolve the IMAGE to fit TEMPLATE")
             # iMerit = check_stamps_numpy(
