@@ -478,7 +478,7 @@ def build_scprod0_numpy(saVectors, saScprod, saXss, saYss, saSscnt, si, image, n
     build_scprod0_jit(saVectors[si], saScprod[si], image_arr,
                       nCompKer, xi, yi, fwKSStamp, hwKSStamp, rPixX)
 
-def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy, nC=None, nKSStamps=None, wxy_pre=None):
+def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, nC=None, nKSStamps=None, wxy_pre=None):
     # def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
     import time
     t0 = time.time()
@@ -501,14 +501,12 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
     #         all_x[i] = int(stamps_dicts[i]['xss'][sscnt])
     #         all_y[i] = int(stamps_dicts[i]['yss'][sscnt])
     #         n_valid += 1
+    wxy = np.zeros((nS, ncomp2), dtype=np.float64)
     valid_mask = (saSscnt[:nS] < saNss[:nS]).astype(np.int32)
     n_valid = valid_mask.sum()
     if n_valid == 0:
-        for i in range(nS):
-            for j in range(ncomp2):
-                wxy[i, j] = 0.0
         matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
-        return matrix
+        return matrix, wxy
     safe_sscnt = np.clip(saSscnt[:nS], 0, nKSStamps - 1)
     all_x = np.where(valid_mask, saXss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
     all_y = np.where(valid_mask, saYss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
@@ -533,8 +531,6 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
     #         all_mat[i] = stamps_dicts[i]['mat'][:nC_valid, :nC_valid]
     #         all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
 
-    if wxy_pre is None:
-        wxy.fill(0.0)
     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
 
     build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
@@ -548,7 +544,7 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
             matrix[j + 1, i + 1] = matrix[i + 1, j + 1]
 
     logger.debug("  build_matrix: done %.3fs n_valid=%d", time.time() - t0, valid_mask.sum())
-    return matrix
+    return matrix, wxy
 
 def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=None):
     # def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
@@ -1852,9 +1848,9 @@ def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, s
         #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
         # matrix = build_matrix_numpy(testSa, ntestStamps, nCompKer, kerOrder, bgOrder,
         #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
-        matrix = build_matrix_numpy(testMat, testVectors, testSscnt, testNss, testXss, testYss,
-                                    ntestStamps, nCompKer, kerOrder, bgOrder,
-                                    fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps)
+        matrix, _ = build_matrix_numpy(testMat, testVectors, testSscnt, testNss, testXss, testYss,
+                                       ntestStamps, nCompKer, kerOrder, bgOrder,
+                                       fwKSStamp, rPixX, rPixY, verbose, nC=nC, nKSStamps=nKSStamps)
 
         # testKerSol = build_scprod_numpy(testStamps, ntestStamps, imRef, nCompKer, kerOrder,
         #                                 bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy)
@@ -2253,9 +2249,9 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
             a1 *= fx
 
     # tm = time.time()
-    matrix = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
-                                nS, nCompKer, kerOrder, bgOrder,
-                                fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps, wxy_pre=wxy)
+    matrix, _ = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
+                                    nS, nCompKer, kerOrder, bgOrder,
+                                    fwKSStamp, rPixX, rPixY, verbose, nC=nC, nKSStamps=nKSStamps, wxy_pre=wxy)
     # kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
     #                                fwKSStamp, hwKSStamp, rPixX, wxy)
     # kernelSol = build_scprod_numpy(sa, nS, imRef, nCompKer, kerOrder, bgOrder,
@@ -2321,9 +2317,9 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         # matrix = build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder,
         #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
         # tm = time.time()
-        matrix = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
-                                    nS, nCompKer, kerOrder, bgOrder,
-                                    fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps, wxy_pre=wxy)
+        matrix, _ = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
+                                        nS, nCompKer, kerOrder, bgOrder,
+                                        fwKSStamp, rPixX, rPixY, verbose, nC=nC, nKSStamps=nKSStamps, wxy_pre=wxy)
         # kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
         #                                fwKSStamp, hwKSStamp, rPixX, wxy)
         # kernelSol = build_scprod_numpy(sa, nS, imRef, nCompKer, kerOrder, bgOrder,
