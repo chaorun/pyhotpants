@@ -338,7 +338,8 @@ def build_matrix0_jit(vectors, mat, nCompKer, kerOrder, bgOrder, fwKSStamp):
 def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                      wxy, matrix,
                      nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY,
-                     ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp):
+                     ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp,
+                     wxy_pre=None):
     rPixX2 = np.float64(np.float32(0.5 * rPixX))
     rPixY2 = np.float64(np.float32(0.5 * rPixY))
 
@@ -346,20 +347,34 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
         if valid_mask[istamp] == 0:
             continue
 
-        xstamp = all_x[istamp]
-        ystamp = all_y[istamp]
-        fx = np.float64(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
-        fy = np.float64(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
+        if wxy_pre is not None:
+            wxy_vals = wxy_pre[istamp]
+        else:
+            xstamp = all_x[istamp]
+            ystamp = all_y[istamp]
+            fx = np.float64(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
+            fy = np.float64(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
 
-        kk = 0
+            kk = 0
+            a1 = 1.0
+            for ideg1 in range(kerOrder + 1):
+                a2 = 1.0
+                for ideg2 in range(kerOrder - ideg1 + 1):
+                    wxy[istamp, kk] = a1 * a2
+                    kk += 1
+                    a2 *= fy
+                a1 *= fx
+            wxy_vals = wxy[istamp]
+
+        # use wxy_vals instead of wxy[istamp, kk] below
+        kk_ref = 0
         a1 = 1.0
         for ideg1 in range(kerOrder + 1):
             a2 = 1.0
             for ideg2 in range(kerOrder - ideg1 + 1):
-                wxy[istamp, kk] = a1 * a2
-                kk += 1
-                a2 *= fy
-            a1 *= fx
+                kk_ref += 1
+                a2 *= 0.0
+            a1 *= 0.0
 
         for i in range(ncomp):
             i1 = i // ncomp2
@@ -369,13 +384,13 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                 j1 = j // ncomp2
                 j2 = j - j1 * ncomp2
 
-                matrix[i + 2, j + 2] += wxy[istamp, i2] * wxy[istamp, j2] * all_mat[istamp, i1 + 2, j1 + 2]
+                matrix[i + 2, j + 2] += wxy_vals[i2] * wxy_vals[j2] * all_mat[istamp, i1 + 2, j1 + 2]
 
         matrix[1, 1] += all_mat[istamp, 1, 1]
         for i in range(ncomp):
             i1 = i // ncomp2
             i2 = i - i1 * ncomp2
-            matrix[i + 2, 1] += wxy[istamp, i2] * all_mat[istamp, i1 + 2, 1]
+            matrix[i + 2, 1] += wxy_vals[i2] * all_mat[istamp, i1 + 2, 1]
 
         for ibg in range(nbg_vec):
             ii = ncomp + ibg + 1
@@ -387,7 +402,7 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
 
                 for i2 in range(ncomp2):
                     jj = (i1 - 1) * ncomp2 + i2 + 1
-                    matrix[ii + 1, jj + 1] += p0 * wxy[istamp, i2]
+                    matrix[ii + 1, jj + 1] += p0 * wxy_vals[i2]
 
             p0 = 0.0
             for kk in range(pixStamp):
@@ -463,7 +478,7 @@ def build_scprod0_numpy(saVectors, saScprod, saXss, saYss, saSscnt, si, image, n
     build_scprod0_jit(saVectors[si], saScprod[si], image_arr,
                       nCompKer, xi, yi, fwKSStamp, hwKSStamp, rPixX)
 
-def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy, nC=None, nKSStamps=None):
+def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy, nC=None, nKSStamps=None, wxy_pre=None):
     # def build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, verbose, wxy):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
@@ -515,13 +530,15 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
     #         all_mat[i] = stamps_dicts[i]['mat'][:nC_valid, :nC_valid]
     #         all_vectors[i] = np.asarray(stamps_dicts[i]['vectors'])[:nvec_total]
 
-    wxy.fill(0.0)
+    if wxy_pre is None:
+        wxy.fill(0.0)
     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
 
     build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                      wxy, matrix,
                      nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY,
-                     ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp)
+                     ncomp, ncomp1, ncomp2, nbg_vec, mat_size, pixStamp,
+                     wxy_pre=wxy_pre)
 
     for i in range(mat_size):
         for j in range(i + 1):
@@ -2195,14 +2212,32 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     iter_count = 0
     # t_start = time.time()
     logger.debug("  fitKernel: iteration %d start", iter_count)
-    # matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
-    #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
-    # matrix = build_matrix_numpy(sa, nS, nCompKer, kerOrder, bgOrder,
-    #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
+
+    # pre-compute wxy once for all stamps (depends only on stamp positions)
+    wxy = np.zeros((nS, ncomp2), dtype=np.float64)
+    rPixX2 = np.float64(np.float32(0.5 * rPixX))
+    rPixY2 = np.float64(np.float32(0.5 * rPixY))
+    for istamp in range(nS):
+        if saSscnt[istamp] >= saNss[istamp]:
+            continue
+        xstamp = int(saXss[istamp, saSscnt[istamp]])
+        ystamp = int(saYss[istamp, saSscnt[istamp]])
+        fx = np.float64(np.float32(np.float32(xstamp) - np.float32(rPixX2)) / np.float32(rPixX2))
+        fy = np.float64(np.float32(np.float32(ystamp) - np.float32(rPixY2)) / np.float32(rPixY2))
+        kk = 0
+        a1 = 1.0
+        for ideg1 in range(kerOrder + 1):
+            a2 = 1.0
+            for ideg2 in range(kerOrder - ideg1 + 1):
+                wxy[istamp, kk] = a1 * a2
+                kk += 1
+                a2 *= fy
+            a1 *= fx
+
     # tm = time.time()
     matrix = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
                                 nS, nCompKer, kerOrder, bgOrder,
-                                fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps)
+                                fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps, wxy_pre=wxy)
     # kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
     #                                fwKSStamp, hwKSStamp, rPixX, wxy)
     # kernelSol = build_scprod_numpy(sa, nS, imRef, nCompKer, kerOrder, bgOrder,
@@ -2254,7 +2289,6 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     while check:
         iter_count += 1
         logger.debug("  fitKernel: iteration %d start", iter_count)
-        wxy = np.zeros((nS, ncomp2), dtype=np.float64)
 
         # matrix = build_matrix_numpy(stamps_dicts, nS, nCompKer, kerOrder, bgOrder,
         #                             fwKSStamp, rPixX, rPixY, verbose, wxy)
@@ -2263,7 +2297,7 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         # tm = time.time()
         matrix = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
                                     nS, nCompKer, kerOrder, bgOrder,
-                                    fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps)
+                                    fwKSStamp, rPixX, rPixY, verbose, wxy, nC=nC, nKSStamps=nKSStamps, wxy_pre=wxy)
         # kernelSol = build_scprod_numpy(stamps_dicts, nS, imRef, nCompKer, kerOrder, bgOrder,
         #                                fwKSStamp, hwKSStamp, rPixX, wxy)
         # kernelSol = build_scprod_numpy(sa, nS, imRef, nCompKer, kerOrder, bgOrder,
