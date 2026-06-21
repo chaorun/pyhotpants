@@ -295,8 +295,7 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     npts = nPixX * nPixY
     if npts < nstat:
-        return {'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
-                'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 4}
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 4, None)
 
     np.random.seed(666)
     flat_indices = np.random.randint(0, npts, size=nstat * 20)
@@ -343,9 +342,10 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
     nan_mask = np.isnan(data_flat)
     skip_all |= nan_mask
 
+    nan_updates = None
     if nan_mask.any():
         nan_y, nan_x = np.where(nan_mask.reshape(nPixY, nPixX))
-        mRData_2d[nan_y + y0Reg, nan_x + x0Reg] |= (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+        nan_updates = (nan_y, nan_x)
 
     sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
     logger.debug("[stats3] mask applied %d/%d pixels, sdat=%d", (~skip_all).sum(), ntotal, len(sdat))
@@ -353,14 +353,12 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         mode_val = 0.0
         if nfound > 0:
             mode_val = work[int(mfstat * nfound)]
-        return {'sum': 0.0, 'mean': 0.0, 'median': mode_val, 'mode': mode_val,
-                'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
+        return (0.0, 0.0, mode_val, mode_val, MAXVAL, 0.0, 0.0, 5, nan_updates)
 
     mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat, maxiter, statSig)
     logger.debug("[stats3] sigma_clip mean=%.4f sd=%.4f rc=%d", mean_val, sd_val, sc_rc)
     if sc_rc != 0:
-        return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
-                'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
+        return (0.0, mean_val, 0.0, 0.0, sd_val, 0.0, 0.0, 5, nan_updates)
 
     isd = 1.0 / sd_val
     clip_mask = (np.abs(sdat.astype(np.float64) - mean_val) * isd) > statSig
@@ -379,24 +377,21 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     while True:
         if tries >= 5:
-            return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
-                    'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 1}
+            return (0.0, mean_val, 0.0, 0.0, sd_val, 0.0, 0.0, 1, nan_updates)
 
         if len(sdat_clipped) == 0:
             mode_val = 0.0
             if nfound > 0:
                 mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
-            return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
-                    'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 2}
+            return (0.0, mean_val, median_val, mode_val, sd_val, 0.0, 0.0, 2, nan_updates)
 
         if current_binsize == 0.0:
             mode_val = 0.0
             if nfound > 0:
                 mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
-            return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
-                    'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 3}
+            return (0.0, mean_val, median_val, mode_val, sd_val, 0.0, 0.0, 3, nan_updates)
 
         indices = ((sdat_clipped.astype(np.float64) - current_bin1) / current_binsize).astype(np.int32) + 1
         indices = np.clip(indices, 0, 255)
@@ -461,22 +456,27 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     logger.debug("[stats3] done mean=%.4f median=%.4f mode=%.4f sd=%.4f fwhm=%.4f lfwhm=%.4f",
                  mean_val, median_val, mode_val, sd_val, fwhm_val, lfwhm_val)
-    return {'sum': ssum_val, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
-            'sd': sd_val, 'fwhm': fwhm_val, 'lfwhm': lfwhm_val, 'return_code': 0}
+    return (ssum_val, mean_val, median_val, mode_val, sd_val, fwhm_val, lfwhm_val, 0, nan_updates)
 
 
-def cut_sstamp_numpy(saKrefArea, saXss, saYss, saX0, saY0, saNss, saSscnt, saSumVal, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
-    saKrefArea[si, :] = fillVal
+# cut_sstamp_numpy: 从参考图像切出 kernel stamp 区域
+# 改为返回局部计算结果，不再原地修改入参数组
+def cut_sstamp_numpy(saXss, saYss, saX0, saY0, saNss, saSscnt, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
+    # 局部分配：用 fillVal 填充整个 stamp 区域
+    fwSqStamp = fwKSStamp * fwKSStamp
+    outKrefArea = np.full(fwSqStamp, fillVal, dtype=np.float64)
 
     nss = saNss[si]
     sscnt = saSscnt[si]
+    # 计算 stamp 在参考图像中的相对位置
     xStamp = int(saXss[si, sscnt]) - saX0[si]
     yStamp = int(saYss[si, sscnt]) - saY0[si]
 
     if sscnt >= nss:
-        return 1
+        return 1  # 失败：无有效 substamp
 
     sumVal = 0.0
+    # 遍历 stamp 像素区域，从参考图像取数据
     for j in range(yStamp - hwKSStamp, yStamp + hwKSStamp + 1):
         y = j - (yStamp - hwKSStamp)
         dy = j + saY0[si]
@@ -484,12 +484,13 @@ def cut_sstamp_numpy(saKrefArea, saXss, saYss, saX0, saY0, saNss, saSscnt, saSum
             x = i - (xStamp - hwKSStamp)
             k = i + saX0[si] + rPixX * dy
             dpt = float(iData[k])
-            saKrefArea[si, x + y * fwKSStamp] = dpt
+            # 写入局部分数组而非 saKrefArea
+            outKrefArea[x + y * fwKSStamp] = dpt
             if not (int(mRData[k]) & FLAG_INPUT_ISBAD):
                 sumVal += abs(dpt)
 
-    saSumVal[si] = sumVal
-    return 0
+    # 返回局部数组和累计值，不再写入 saSumVal
+    return outKrefArea, sumVal
 
 
 @numba.jit(nopython=True)
@@ -529,12 +530,14 @@ def check_psf_center_numba(iData, imax, jmax, xLen, yLen, sx0, sy0,
 def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
                             hiThresh, sky, invdsky,
                             xbuffer, ybuffer, bbit, bbit1,
-                            rPixX, hwKSStamp, mRData, kerFitThresh):
+                            rPixX, hwKSStamp, kerFitThresh):
+    # 不再接收 mRData 入参，改为收集需标记的像素索引
     sky = float(np.float32(sky))
     invdsky = float(np.float32(invdsky))
     kerFitThresh = float(np.float32(kerFitThresh))
     brk = 0
     dmax2 = 0.0
+    maskUpdates = []  # 收集需要标记 bbit1 的像素索引
 
     for l in range(jmax - hwKSStamp, jmax + hwKSStamp + 1):
         if l < ybuffer or l >= yLen - ybuffer:
@@ -549,15 +552,12 @@ def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
             xr2 = k + sx0
             nr2 = xr2 + rPixX * yr2
 
-            if int(mRData[nr2]) & bbit:
-                brk = 1
-                dmax2 = 0.0
-                break
-
+            # 不再读取 mRData，改为调用方预先判断
+            # 不再写入 mRData，改为收集索引交调用方处理
             dpt2 = float(iData[nr2])
 
             if dpt2 >= hiThresh:
-                mRData[nr2] = int(mRData[nr2]) | bbit1
+                maskUpdates.append(nr2)  # 收集高亮像素索引
                 brk = 1
                 dmax2 = 0.0
                 break
@@ -568,7 +568,7 @@ def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
         if brk == 1:
             break
 
-    return dmax2
+    return dmax2, maskUpdates  # 返回标记列表，调用方负责应用
 
 
 def quick_sort_impl(listArr, n):
@@ -604,145 +604,146 @@ def quick_sort_recurse(listArr, index, leftEnd, rightEnd):
         quick_sort_recurse(listArr, index, i, rightEnd)
 
 
-def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
-                           nKSStamps, hwKSStamp, rPixX, mRData, kerFitThresh,
-                           verbose=0):
-    kerFitThresh = float(np.float32(kerFitThresh))
-    logger.debug("  psf_centers: si=%d nss=%d nKS=%d hwKS=%d", si, sa.nss[si], nKSStamps, hwKSStamp)
-    dfrac = 0.9
-
-    if sa.nss[si] >= nKSStamps:
-        return 0
-
-    bbit = bbit1 | bbit2 | 0xbf
-    sky = sa.mode[si]
-    invdsky = 1.0 / sa.fwhm[si]
-
-    sx0 = sa.x0[si]
-    sy0 = sa.y0[si]
-
-    xbuffer = 0
-    ybuffer = 0
-
-    floorVal = sky + kerFitThresh * sa.fwhm[si]
-
-    allocSize = max(1, (xLen * yLen) // hwKSStamp)
-    xloc = np.zeros(allocSize, dtype=np.int32)
-    yloc = np.zeros(allocSize, dtype=np.int32)
-    peaks = np.zeros(allocSize, dtype=np.float64)
-
-    brk = 0
-    pcnt = 0
-    fcnt = 2 * nKSStamps
-
-    while pcnt < fcnt:
-        loPsf = sky + (hiThresh - sky) * dfrac
-        loPsf = max(loPsf, floorVal)
-
-        for j in range(ybuffer, yLen - ybuffer):
-            yr = j + sy0
-
-            for i in range(xbuffer, xLen - xbuffer):
-                xr = i + sx0
-                nr = xr + rPixX * yr
-
-                if int(mRData[nr]) & bbit:
-                    continue
-
-                dpt = float(iData[nr])
-
-                if dpt >= hiThresh:
-                    mRData[nr] = int(mRData[nr]) | bbit1
-                    continue
-
-                if ((dpt - sky) * invdsky) < kerFitThresh:
-                    continue
-
-                if dpt > loPsf:
-                    dmax = dpt
-                    imaxVal = i
-                    jmaxVal = j
-
-                    for l in range(j - hwKSStamp, j + hwKSStamp + 1):
-                        yr2 = l + sy0
-
-                        if l < ybuffer or l >= yLen - ybuffer:
-                            continue
-
-                        for k in range(i - hwKSStamp, i + hwKSStamp + 1):
-                            xr2 = k + sx0
-                            nr2 = xr2 + rPixX * yr2
-
-                            if k < xbuffer or k >= xLen - xbuffer:
-                                continue
-
-                            if int(mRData[nr2]) & bbit:
-                                continue
-
-                            dpt2 = float(iData[nr2])
-
-                            if dpt2 >= hiThresh:
-                                mRData[nr2] = int(mRData[nr2]) | bbit1
-                                continue
-
-                            if ((dpt2 - sky) * invdsky) < kerFitThresh:
-                                continue
-
-                            if dpt2 > dmax:
-                                dmax = dpt2
-                                imaxVal = k
-                                jmaxVal = l
-
-                    dmax2 = check_psf_center_numpy(
-                        iData, imaxVal, jmaxVal, xLen, yLen,
-                        sx0, sy0, hiThresh, sky, invdsky,
-                        xbuffer, ybuffer, bbit, bbit1,
-                        rPixX, hwKSStamp, mRData, kerFitThresh)
-
-                    if dmax2 == 0.0:
-                        continue
-
-                    xloc[pcnt] = imaxVal
-                    yloc[pcnt] = jmaxVal
-                    peaks[pcnt] = dmax2
-                    pcnt += 1
-
-                    for l in range(jmaxVal - hwKSStamp, jmaxVal + hwKSStamp + 1):
-                        yr2 = l + sy0
-
-                        for k in range(imaxVal - hwKSStamp, imaxVal + hwKSStamp + 1):
-                            xr2 = k + sx0
-                            nr2 = xr2 + rPixX * yr2
-
-                            if (k > 0) and (k < xLen) and (l > 0) and (l < yLen):
-                                mRData[nr2] = int(mRData[nr2]) | bbit2
-
-                    if pcnt >= fcnt:
-                        brk = 2
-
-                if brk == 2:
-                    break
-            if brk == 2:
-                break
-
-        if loPsf == floorVal:
-            break
-        dfrac -= 0.2
-
-    if pcnt == 0:
-        return 1
-    else:
-        qs = np.argsort(peaks[:pcnt])
-        nssOrig = sa.nss[si]
-        idx = nssOrig
-        jj = 0
-        while jj < pcnt and idx < nKSStamps:
-            sa.xss[si, idx] = xloc[qs[pcnt - jj - 1]] + sx0
-            sa.yss[si, idx] = yloc[qs[pcnt - jj - 1]] + sy0
-            sa.nss[si] += 1
-            idx += 1
-            jj += 1
-        return 0
+# get_psf_centers_numpy 已被 psfCentersJit 替代，不再使用，注释保留
+# def get_psf_centers_numpy(sa, si, iData, xLen, yLen, hiThresh, bbit1, bbit2,
+#                            nKSStamps, hwKSStamp, rPixX, mRData, kerFitThresh,
+#                            verbose=0):
+#     kerFitThresh = float(np.float32(kerFitThresh))
+#     logger.debug("  psf_centers: si=%d nss=%d nKS=%d hwKS=%d", si, sa.nss[si], nKSStamps, hwKSStamp)
+#     dfrac = 0.9
+# 
+#     if sa.nss[si] >= nKSStamps:
+#         return 0
+# 
+#     bbit = bbit1 | bbit2 | 0xbf
+#     sky = sa.mode[si]
+#     invdsky = 1.0 / sa.fwhm[si]
+# 
+#     sx0 = sa.x0[si]
+#     sy0 = sa.y0[si]
+# 
+#     xbuffer = 0
+#     ybuffer = 0
+# 
+#     floorVal = sky + kerFitThresh * sa.fwhm[si]
+# 
+#     allocSize = max(1, (xLen * yLen) // hwKSStamp)
+#     xloc = np.zeros(allocSize, dtype=np.int32)
+#     yloc = np.zeros(allocSize, dtype=np.int32)
+#     peaks = np.zeros(allocSize, dtype=np.float64)
+# 
+#     brk = 0
+#     pcnt = 0
+#     fcnt = 2 * nKSStamps
+# 
+#     while pcnt < fcnt:
+#         loPsf = sky + (hiThresh - sky) * dfrac
+#         loPsf = max(loPsf, floorVal)
+# 
+#         for j in range(ybuffer, yLen - ybuffer):
+#             yr = j + sy0
+# 
+#             for i in range(xbuffer, xLen - xbuffer):
+#                 xr = i + sx0
+#                 nr = xr + rPixX * yr
+# 
+#                 if int(mRData[nr]) & bbit:
+#                     continue
+# 
+#                 dpt = float(iData[nr])
+# 
+#                 if dpt >= hiThresh:
+#                     mRData[nr] = int(mRData[nr]) | bbit1
+#                     continue
+# 
+#                 if ((dpt - sky) * invdsky) < kerFitThresh:
+#                     continue
+# 
+#                 if dpt > loPsf:
+#                     dmax = dpt
+#                     imaxVal = i
+#                     jmaxVal = j
+# 
+#                     for l in range(j - hwKSStamp, j + hwKSStamp + 1):
+#                         yr2 = l + sy0
+# 
+#                         if l < ybuffer or l >= yLen - ybuffer:
+#                             continue
+# 
+#                         for k in range(i - hwKSStamp, i + hwKSStamp + 1):
+#                             xr2 = k + sx0
+#                             nr2 = xr2 + rPixX * yr2
+# 
+#                             if k < xbuffer or k >= xLen - xbuffer:
+#                                 continue
+# 
+#                             if int(mRData[nr2]) & bbit:
+#                                 continue
+# 
+#                             dpt2 = float(iData[nr2])
+# 
+#                             if dpt2 >= hiThresh:
+#                                 mRData[nr2] = int(mRData[nr2]) | bbit1
+#                                 continue
+# 
+#                             if ((dpt2 - sky) * invdsky) < kerFitThresh:
+#                                 continue
+# 
+#                             if dpt2 > dmax:
+#                                 dmax = dpt2
+#                                 imaxVal = k
+#                                 jmaxVal = l
+# 
+#                     dmax2 = check_psf_center_numpy(
+#                         iData, imaxVal, jmaxVal, xLen, yLen,
+#                         sx0, sy0, hiThresh, sky, invdsky,
+#                         xbuffer, ybuffer, bbit, bbit1,
+#                         rPixX, hwKSStamp, mRData, kerFitThresh)
+# 
+#                     if dmax2 == 0.0:
+#                         continue
+# 
+#                     xloc[pcnt] = imaxVal
+#                     yloc[pcnt] = jmaxVal
+#                     peaks[pcnt] = dmax2
+#                     pcnt += 1
+# 
+#                     for l in range(jmaxVal - hwKSStamp, jmaxVal + hwKSStamp + 1):
+#                         yr2 = l + sy0
+# 
+#                         for k in range(imaxVal - hwKSStamp, imaxVal + hwKSStamp + 1):
+#                             xr2 = k + sx0
+#                             nr2 = xr2 + rPixX * yr2
+# 
+#                             if (k > 0) and (k < xLen) and (l > 0) and (l < yLen):
+#                                 mRData[nr2] = int(mRData[nr2]) | bbit2
+# 
+#                     if pcnt >= fcnt:
+#                         brk = 2
+# 
+#                 if brk == 2:
+#                     break
+#             if brk == 2:
+#                 break
+# 
+#         if loPsf == floorVal:
+#             break
+#         dfrac -= 0.2
+# 
+#     if pcnt == 0:
+#         return 1
+#     else:
+#         qs = np.argsort(peaks[:pcnt])
+#         nssOrig = sa.nss[si]
+#         idx = nssOrig
+#         jj = 0
+#         while jj < pcnt and idx < nKSStamps:
+#             sa.xss[si, idx] = xloc[qs[pcnt - jj - 1]] + sx0
+#             sa.yss[si, idx] = yloc[qs[pcnt - jj - 1]] + sy0
+#             sa.nss[si] += 1
+#             idx += 1
+#             jj += 1
+#         return 0
 
 
 def psfCentersVectorized(iData1d, mRData1d, sPixX, sPixY, hwKSStamp, rPixX,
@@ -978,14 +979,14 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 refArea2d, lctX0, lctY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
-            if result['return_code'] == 0:
-                lctSumVal = result['sum']
-                lctMeanVal = result['mean']
-                lctMedian = result['median']
-                lctMode = result['mode']
-                lctSd = result['sd']
-                lctFwhm = result['fwhm']
-                lctLfwhm = result['lfwhm']
+            if result[7] == 0:
+                lctSumVal = result[0]
+                lctMeanVal = result[1]
+                lctMedian = result[2]
+                lctMode = result[3]
+                lctSd = result[4]
+                lctFwhm = result[5]
+                lctLfwhm = result[6]
 
     if forceConvolve != "t":
         if lciNss == 0:
@@ -1003,14 +1004,14 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 refArea2d, lciX0, lciY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
-            if result['return_code'] == 0:
-                lciSumVal = result['sum']
-                lciMeanVal = result['mean']
-                lciMedian = result['median']
-                lciMode = result['mode']
-                lciSd = result['sd']
-                lciFwhm = result['fwhm']
-                lciLfwhm = result['lfwhm']
+            if result[7] == 0:
+                lciSumVal = result[0]
+                lciMeanVal = result[1]
+                lciMedian = result[2]
+                lciMode = result[3]
+                lciSd = result[4]
+                lciFwhm = result[5]
+                lciLfwhm = result[6]
 
     if forceConvolve != "i":
         nss = lctNss

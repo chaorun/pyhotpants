@@ -14,7 +14,7 @@ from .functions import (
     insert_subregion_flt_numpy, insert_subregion_int_numpy,
     cut_stamp_numpy, get_stamp_stats3_numpy, bin_quartile_numpy,
     get_stamp_stats3_fast_numpy, cut_sstamp_numpy,
-    check_psf_center_numba, check_psf_center_numpy, get_psf_centers_numpy,
+    check_psf_center_numba, check_psf_center_numpy,
     quick_sort_impl, quick_sort_recurse,
     psfCentersJit, buildStampsNumba,
     lubksb_numpy, ludcmp_numpy,
@@ -782,8 +782,7 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     npts = nPixX * nPixY
     if npts < nstat:
-        return {'sum': 0.0, 'mean': 0.0, 'median': 0.0, 'mode': 0.0,
-                'sd': 0.0, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 4}
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 4, None)
 
     np.random.seed(666)
     flat_indices = np.random.randint(0, npts, size=nstat * 20)
@@ -832,9 +831,11 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
     skip_all |= nan_mask
     # t_nan = time.time()
 
+    # 收集 NaN 像素标记信息，不再原地修改 mRData_2d
+    nan_updates = None
     if nan_mask.any():
         nan_y, nan_x = np.where(nan_mask.reshape(nPixY, nPixX))
-        mRData_2d[nan_y + y0Reg, nan_x + x0Reg] |= (FLAG_INPUT_ISBAD | FLAG_ISNAN)
+        nan_updates = (nan_y, nan_x)
     # t_where = time.time()
 
     sdat = np.asarray(data_flat[~skip_all], dtype=np.float32)
@@ -844,15 +845,13 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
         mode_val = 0.0
         if nfound > 0:
             mode_val = work[int(mfstat * nfound)]
-        return {'sum': 0.0, 'mean': 0.0, 'median': mode_val, 'mode': mode_val,
-                'sd': MAXVAL, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
+        return (0.0, 0.0, mode_val, mode_val, MAXVAL, 0.0, 0.0, 5, nan_updates)
 
     # t2 = time.time()
     mean_val, sd_val, sc_rc = sigma_clip_numpy(sdat, maxiter, statSig)
     # t3 = time.time(); logger.debug("[stats3] sigma_clip %.3fs", t3 - t2)
     if sc_rc != 0:
-        return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
-                'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 5}
+        return (0.0, mean_val, 0.0, 0.0, sd_val, 0.0, 0.0, 5, nan_updates)
 
     isd = 1.0 / sd_val
     clip_mask = (np.abs(sdat.astype(np.float64) - mean_val) * isd) > statSig
@@ -871,24 +870,21 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
 
     while True:
         if tries >= 5:
-            return {'sum': 0.0, 'mean': mean_val, 'median': 0.0, 'mode': 0.0,
-                    'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 1}
+            return (0.0, mean_val, 0.0, 0.0, sd_val, 0.0, 0.0, 1, nan_updates)
 
         if len(sdat_clipped) == 0:
             mode_val = 0.0
             if nfound > 0:
                 mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
-            return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
-                    'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 2}
+            return (0.0, mean_val, median_val, mode_val, sd_val, 0.0, 0.0, 2, nan_updates)
 
         if current_binsize == 0.0:
             mode_val = 0.0
             if nfound > 0:
                 mode_val = work[int(mfstat * nfound)]
             median_val = mode_val
-            return {'sum': 0.0, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
-                    'sd': sd_val, 'fwhm': 0.0, 'lfwhm': 0.0, 'return_code': 3}
+            return (0.0, mean_val, median_val, mode_val, sd_val, 0.0, 0.0, 3, nan_updates)
 
         indices = ((sdat_clipped.astype(np.float64) - current_bin1) / current_binsize).astype(np.int32) + 1
         indices = np.clip(indices, 0, 255)
@@ -952,13 +948,15 @@ def get_stamp_stats3_fast_numpy(data_2d, x0Reg, y0Reg, nPixX, nPixY,
     lfwhm_val = current_binsize * (median_val - lower_val) * 2.0 / 1.35
     median_val = current_bin1 + current_binsize * (median_val - 1.0)
 
-    return {'sum': ssum_val, 'mean': mean_val, 'median': median_val, 'mode': mode_val,
-            'sd': sd_val, 'fwhm': fwhm_val, 'lfwhm': lfwhm_val, 'return_code': 0}
+    return (ssum_val, mean_val, median_val, mode_val, sd_val, fwhm_val, lfwhm_val, 0, nan_updates)
 
 
-def cut_sstamp_numpy(saKrefArea, saXss, saYss, saX0, saY0, saNss, saSscnt, saSumVal, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
+# cut_sstamp_numpy: 从参考图像切出 kernel stamp 区域，返回局部结果
+def cut_sstamp_numpy(saXss, saYss, saX0, saY0, saNss, saSscnt, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
     # def cut_sstamp_numpy(sa, si, iData, fwKSStamp, hwKSStamp, fillVal, rPixX, mRData, verbose=0):
-    saKrefArea[si, :] = fillVal
+    # 局部分配 stamp 区域数组
+    fwSqStamp = fwKSStamp * fwKSStamp
+    outKrefArea = np.full(fwSqStamp, fillVal, dtype=np.float64)
 
     nss = saNss[si]
     sscnt = saSscnt[si]
@@ -966,7 +964,7 @@ def cut_sstamp_numpy(saKrefArea, saXss, saYss, saX0, saY0, saNss, saSscnt, saSum
     yStamp = int(saYss[si, sscnt]) - saY0[si]
 
     if sscnt >= nss:
-        return 1
+        return 1  # 失败返回
 
     sumVal = 0.0
     for j in range(yStamp - hwKSStamp, yStamp + hwKSStamp + 1):
@@ -976,12 +974,13 @@ def cut_sstamp_numpy(saKrefArea, saXss, saYss, saX0, saY0, saNss, saSscnt, saSum
             x = i - (xStamp - hwKSStamp)
             k = i + saX0[si] + rPixX * dy
             dpt = float(iData[k])
-            saKrefArea[si, x + y * fwKSStamp] = dpt
+            # 写入局部数组，不再原地修改
+            outKrefArea[x + y * fwKSStamp] = dpt
             if not (int(mRData[k]) & FLAG_INPUT_ISBAD):
                 sumVal += abs(dpt)
 
-    saSumVal[si] = sumVal
-    return 0
+    # 返回局部结果，由调用方写回 sa 数组
+    return outKrefArea, sumVal
 
 
 @numba.jit(nopython=True)
@@ -1021,12 +1020,14 @@ def check_psf_center_numba(iData, imax, jmax, xLen, yLen, sx0, sy0,
 def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
                             hiThresh, sky, invdsky,
                             xbuffer, ybuffer, bbit, bbit1,
-                            rPixX, hwKSStamp, mRData, kerFitThresh):
+                            rPixX, hwKSStamp, kerFitThresh):
+    # 不再接收 mRData 入参，改为收集需标记的像素索引
     sky = float(np.float32(sky))
     invdsky = float(np.float32(invdsky))
     kerFitThresh = float(np.float32(kerFitThresh))
     brk = 0
     dmax2 = 0.0
+    maskUpdates = []  # 收集需要标记 bbit1 的像素索引
 
     for l in range(jmax - hwKSStamp, jmax + hwKSStamp + 1):
         if l < ybuffer or l >= yLen - ybuffer:
@@ -1041,15 +1042,11 @@ def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
             xr2 = k + sx0
             nr2 = xr2 + rPixX * yr2
 
-            if int(mRData[nr2]) & bbit:
-                brk = 1
-                dmax2 = 0.0
-                break
-
+            # 不再读取/写入 mRData，改为收集索引交调用方处理
             dpt2 = float(iData[nr2])
 
             if dpt2 >= hiThresh:
-                mRData[nr2] = int(mRData[nr2]) | bbit1
+                maskUpdates.append(nr2)  # 收集高亮像素索引
                 brk = 1
                 dmax2 = 0.0
                 break
@@ -1060,7 +1057,7 @@ def check_psf_center_numpy(iData, imax, jmax, xLen, yLen, sx0, sy0,
         if brk == 1:
             break
 
-    return dmax2
+    return dmax2, maskUpdates  # 返回标记列表，调用方负责应用
 
 
 def quick_sort_impl(listArr, n):
@@ -1822,21 +1819,21 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 refArea2d, lctX0, lctY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
-            if result['return_code'] == 0:
+            if result[7] == 0:
                 # ctStamps[ntS]['sum'] = result['sum']
-                lctSumVal = result['sum']
+                lctSumVal = result[0]
                 # ctStamps[ntS]['mean'] = result['mean']
-                lctMeanVal = result['mean']
+                lctMeanVal = result[1]
                 # ctStamps[ntS]['median'] = result['median']
-                lctMedian = result['median']
+                lctMedian = result[2]
                 # ctStamps[ntS]['mode'] = result['mode']
-                lctMode = result['mode']
+                lctMode = result[3]
                 # ctStamps[ntS]['sd'] = result['sd']
-                lctSd = result['sd']
+                lctSd = result[4]
                 # ctStamps[ntS]['fwhm'] = result['fwhm']
-                lctFwhm = result['fwhm']
+                lctFwhm = result[5]
                 # ctStamps[ntS]['lfwhm'] = result['lfwhm']
-                lctLfwhm = result['lfwhm']
+                lctLfwhm = result[6]
 
     if forceConvolve != "t":
         # if ciStamps[niS]['nss'] == 0:
@@ -1860,21 +1857,21 @@ def buildStampsNumba(sXMin, sXMax, sYMin, sYMax, niS, ntS,
                 refArea2d, lciX0, lciY0,
                 sPixX, sPixY, 0x0, 0xffff, 3, rPixX, mRData2d, statSig)
 
-            if result['return_code'] == 0:
+            if result[7] == 0:
                 # ciStamps[niS]['sum'] = result['sum']
-                lciSumVal = result['sum']
+                lciSumVal = result[0]
                 # ciStamps[niS]['mean'] = result['mean']
-                lciMeanVal = result['mean']
+                lciMeanVal = result[1]
                 # ciStamps[niS]['median'] = result['median']
-                lciMedian = result['median']
+                lciMedian = result[2]
                 # ciStamps[niS]['mode'] = result['mode']
-                lciMode = result['mode']
+                lciMode = result[3]
                 # ciStamps[niS]['sd'] = result['sd']
-                lciSd = result['sd']
+                lciSd = result[4]
                 # ciStamps[niS]['fwhm'] = result['fwhm']
-                lciFwhm = result['fwhm']
+                lciFwhm = result[5]
                 # ciStamps[niS]['lfwhm'] = result['lfwhm']
-                lciLfwhm = result['lfwhm']
+                lciLfwhm = result[6]
 
     if forceConvolve != "i":
         # nss = ctStamps[ntS]['nss']
@@ -3618,12 +3615,12 @@ def get_stamp_sig_numpy(sa, si, kernelSol, imNoise, fwKSStamp, hwKSStamp,
         result = get_stamp_stats3_numpy(temp_2d, xRegion - hwKSStamp, yRegion - hwKSStamp,
                                         fwKSStamp, fwKSStamp,
                                         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
-        if result['return_code'] != 0:
+        if result[7] != 0:
             sig2 = -1.0
             sig3 = -1.0
         else:
-            sig2 = result['sd']
-            sig3 = result['fwhm']
+            sig2 = result[4]
+            sig3 = result[5]
             if sig2 < 0 or sig2 >= MAXVAL:
                 sig2 = -1.0
             elif sig3 < 0 or sig3 >= MAXVAL:
@@ -4567,12 +4564,12 @@ def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, s
                 result = get_stamp_stats3_numpy(temp_2d, xRegion - hwKSStamp, yRegion - hwKSStamp,
                                                 fwKSStamp, fwKSStamp,
                                                 0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
-                if result['return_code'] != 0:
+                if result[7] != 0:
                     sig2 = -1.0
                     sig3 = -1.0
                 else:
-                    sig2 = result['sd']
-                    sig3 = result['fwhm']
+                    sig2 = result[4]
+                    sig3 = result[5]
                     if sig2 < 0 or sig2 >= MAXVAL:
                         sig2 = -1.0
                     elif sig3 < 0 or sig3 >= MAXVAL:
@@ -6723,26 +6720,26 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     res_good = get_stamp_stats3_numpy(
         oRData_2d, 0, 0, rPixX, rPixY,
         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
-    mean_val = res_good['mean']
-    sd_val = res_good['sd']
-    sys.stderr.write("   Mean   : %.2f\n" % res_good['mean'])
-    sys.stderr.write("   Median : %.2f\n" % res_good['median'])
-    sys.stderr.write("   Mode   : %.2f\n" % res_good['mode'])
-    sys.stderr.write("   Stdev  : %.2f\n" % res_good['sd'])
+    mean_val = res_good[1]
+    sd_val = res_good[4]
+    sys.stderr.write("   Mean   : %.2f\n" % res_good[1])
+    sys.stderr.write("   Median : %.2f\n" % res_good[2])
+    sys.stderr.write("   Mode   : %.2f\n" % res_good[3])
+    sys.stderr.write("   Stdev  : %.2f\n" % res_good[4])
 
     sys.stderr.write(" Getting noiseim stats for GOOD pixels : \n")
     nres_good = get_stamp_stats3_numpy(
         noiseData_2d, 0, 0, rPixX, rPixY,
         0x0, 0xffff, 5, rPixX, mRData_2d, statSig)
-    nmean_val = nres_good['mean']
+    nmean_val = nres_good[1]
 
     x2norm, nx2norm = get_noise_stats3_numpy(
         oRData1d, noiseData1d, 0x0, 0xffff, rPixX, rPixY, mRData1d)
 
-    sys.stderr.write("   Mean   : %.2f\n" % nres_good['mean'])
-    sys.stderr.write("   Median : %.2f\n" % nres_good['median'])
-    sys.stderr.write("   Mode   : %.2f\n" % nres_good['mode'])
-    sys.stderr.write("   Stdev  : %.2f\n" % nres_good['sd'])
+    sys.stderr.write("   Mean   : %.2f\n" % nres_good[1])
+    sys.stderr.write("   Median : %.2f\n" % nres_good[2])
+    sys.stderr.write("   Mode   : %.2f\n" % nres_good[3])
+    sys.stderr.write("   Stdev  : %.2f\n" % nres_good[4])
     sys.stderr.write(" Emperical / Expected Noise for GOOD pixels = %.2f\n" % (sd_val / nmean_val if nmean_val != 0 else 0.0))
     sys.stderr.write(" X2NORM = %.2f\n\n" % x2norm)
 
@@ -6752,22 +6749,22 @@ def region_output_numpy(convolve_result, setup_result, fit_result,
     res_ok = get_stamp_stats3_numpy(
         oRData_2d, 0, 0, rPixX, rPixY,
         0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
-    meanm_val = res_ok['mean']
-    sdm_val = res_ok['sd']
-    sys.stderr.write("   Mean   : %.2f\n" % res_ok['mean'])
-    sys.stderr.write("   Median : %.2f\n" % res_ok['median'])
-    sys.stderr.write("   Mode   : %.2f\n" % res_ok['mode'])
-    sys.stderr.write("   Stdev  : %.2f\n" % res_ok['sd'])
+    meanm_val = res_ok[1]
+    sdm_val = res_ok[4]
+    sys.stderr.write("   Mean   : %.2f\n" % res_ok[1])
+    sys.stderr.write("   Median : %.2f\n" % res_ok[2])
+    sys.stderr.write("   Mode   : %.2f\n" % res_ok[3])
+    sys.stderr.write("   Stdev  : %.2f\n" % res_ok[4])
 
     sys.stderr.write(" Getting noiseim stats for OK pixels : \n")
     nres_ok = get_stamp_stats3_numpy(
         noiseData_2d, 0, 0, rPixX, rPixY,
         0xff, FLAG_OUTPUT_ISBAD, 5, rPixX, mRData_2d, statSig)
-    nmeanm_val = nres_ok['mean']
-    sys.stderr.write("   Mean   : %.2f\n" % nres_ok['mean'])
-    sys.stderr.write("   Median : %.2f\n" % nres_ok['median'])
-    sys.stderr.write("   Mode   : %.2f\n" % nres_ok['mode'])
-    sys.stderr.write("   Stdev  : %.2f\n" % nres_ok['sd'])
+    nmeanm_val = nres_ok[1]
+    sys.stderr.write("   Mean   : %.2f\n" % nres_ok[1])
+    sys.stderr.write("   Median : %.2f\n" % nres_ok[2])
+    sys.stderr.write("   Mode   : %.2f\n" % nres_ok[3])
+    sys.stderr.write("   Stdev  : %.2f\n" % nres_ok[4])
 
     sys.stderr.write(" Emperical / Expected Noise for OK pixels = %.2f\n\n" % (sdm_val / nmeanm_val if nmeanm_val != 0 else 0.0))
 
