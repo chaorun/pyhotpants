@@ -3361,7 +3361,8 @@ def get_stamp_sig_batch_jit(
     fwKSStamp, hwKSStamp, rPixX, rPixY,
     nCompKer, kerOrder, bgOrder, nS,
     figMerit_is_v, statSig,
-    out_sig1, out_sig2, out_sig3):
+    out_sig1, out_sig2, out_sig3,
+    batched_bg=None, batched_coeffs=None):
 
     LOCAL_ZEROVAL = 1e-10
     LOCAL_MAXVAL = 1e10
@@ -3380,38 +3381,46 @@ def get_stamp_sig_batch_jit(
         xi = sa_xss[si, scnt]
         yi = sa_yss[si, scnt]
 
-        ncompBG = (nCompKer - 1) * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
-        background = 0.0
-        k = 1
-        xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
-        yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
-        ax = 1.0
-        for i in range(bgOrder + 1):
-            ay = 1.0
-            for j in range(bgOrder - i + 1):
-                background += kernelSol[ncompBG + k] * ax * ay
-                k += 1
-                ay *= yf
-            ax *= xf
+        if batched_bg is not None:
+            background = batched_bg[si]
+        else:
+            ncompBG = (nCompKer - 1) * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+            background = 0.0
+            k = 1
+            xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
+            yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
+            ax = 1.0
+            for i in range(bgOrder + 1):
+                ay = 1.0
+                for j in range(bgOrder - i + 1):
+                    background += kernelSol[ncompBG + k] * ax * ay
+                    k += 1
+                    ay *= yf
+                ax *= xf
 
         csModel = np.zeros(fwSq, dtype=np.float64)
         coeff = kernelSol[1]
         for i in range(fwSq):
             csModel[i] = coeff * sa_vectors[si, 0, i]
 
-        kk = 2
-        for i1 in range(1, nCompKer):
-            coeff = 0.0
-            ax = 1.0
-            for ix in range(kerOrder + 1):
-                ay = 1.0
-                for iy in range(kerOrder - ix + 1):
-                    coeff += kernelSol[kk] * ax * ay
-                    kk += 1
-                    ay *= yf
-                ax *= xf
-            for i in range(fwSq):
-                csModel[i] += coeff * sa_vectors[si, i1, i]
+        if batched_coeffs is not None:
+            for i1 in range(1, nCompKer):
+                for i in range(fwSq):
+                    csModel[i] += batched_coeffs[si, i1] * sa_vectors[si, i1, i]
+        else:
+            kk = 2
+            for i1 in range(1, nCompKer):
+                coeff2 = 0.0
+                ax = 1.0
+                for ix in range(kerOrder + 1):
+                    ay = 1.0
+                    for iy in range(kerOrder - ix + 1):
+                        coeff2 += kernelSol[kk] * ax * ay
+                        kk += 1
+                        ay *= yf
+                    ax *= xf
+                for i in range(fwSq):
+                    csModel[i] += coeff2 * sa_vectors[si, i1, i]
 
         im = sa_krefArea[si]
 
@@ -4610,6 +4619,44 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
         batch_sig1 = np.zeros(nS, dtype=np.float64)
         batch_sig2 = np.zeros(nS, dtype=np.float64)
         batch_sig3 = np.zeros(nS, dtype=np.float64)
+
+        # batch polynomial pre-computation for all stamps
+        halfX, halfY = 0.5 * rPixX, 0.5 * rPixY
+        xf_batch = np.zeros(nS, dtype=np.float64)
+        yf_batch = np.zeros(nS, dtype=np.float64)
+        for si in range(nS):
+            if saSscnt[si] < saNss[si]:
+                xi = float(saXss[si, saSscnt[si]])
+                yi = float(saYss[si, saSscnt[si]])
+                xf_batch[si] = (xi - halfX) / halfX
+                yf_batch[si] = (yi - halfY) / halfY
+
+        ncompBG = (nCompKer - 1) * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+        batched_bg = np.zeros(nS, dtype=np.float64)
+        kb = 1
+        ax_arr = np.ones(nS, dtype=np.float64)
+        for i in range(bgOrder + 1):
+            ay_arr = np.ones(nS, dtype=np.float64)
+            for j in range(bgOrder - i + 1):
+                batched_bg += kernelSol[ncompBG + kb] * ax_arr * ay_arr
+                kb += 1
+                ay_arr *= yf_batch
+            ax_arr *= xf_batch
+
+        batched_coeffs4 = np.zeros((nS, nCompKer), dtype=np.float64)
+        kk = 2
+        for i1 in range(1, nCompKer):
+            coeff_arr = np.zeros(nS, dtype=np.float64)
+            ax_arr = np.ones(nS, dtype=np.float64)
+            for ix in range(kerOrder + 1):
+                ay_arr = np.ones(nS, dtype=np.float64)
+                for iy in range(kerOrder - ix + 1):
+                    coeff_arr += kernelSol[kk] * ax_arr * ay_arr
+                    kk += 1
+                    ay_arr *= yf_batch
+                ax_arr *= xf_batch
+            batched_coeffs4[:, i1] = coeff_arr
+
         get_stamp_sig_batch_jit(
             np.asarray(saVectors, dtype=np.float64), np.asarray(saKrefArea, dtype=np.float64),
             saSscnt, saNss, saXss, saYss,
@@ -4619,7 +4666,8 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saMat, sa
             fwKSStamp, hwKSStamp, rPixX, rPixY,
             nCompKer, kerOrder, bgOrder, nS,
             1, statSig,
-            batch_sig1, batch_sig2, batch_sig3)
+            batch_sig1, batch_sig2, batch_sig3,
+            batched_bg=batched_bg, batched_coeffs=batched_coeffs4)
 
     for istamp in range(nS):
         if saSscnt[istamp] < saNss[istamp]:
