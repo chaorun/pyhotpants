@@ -1,11 +1,24 @@
 import numpy as np
 import numba
+from typing import List, Dict, Tuple, Optional
 
 from .functions import MAXVAL, sigma_clip_numpy, get_stamp_stats3_numpy
 
 
-def buildAllKernels(kernelSol, kernelVec2d, nCompKer, kerOrder, fwKernel, hwKernel, kcStep, rPixX, rPixY, xSize, ySize):
-    fwSq = fwKernel * fwKernel
+# 预计算所有 kcStep 块锚点的空间可变卷积核，返回 (allKernels, nstepsX, nstepsY)
+def buildAllKernels(kernelSol: np.ndarray, kernelVec2d: np.ndarray, nCompKer: int, kerOrder: int, fwKernel: int, hwKernel: int, kcStep: int, rPixX: int, rPixY: int, xSize: int, ySize: int) -> Tuple[np.ndarray, int, int]:
+    """预计算所有 kcStep 块的卷积核矩阵。
+    kernelSol: 核多项式系数向量 (长度 nCompKer+2)
+    kernelVec2d: 核基函数 2D 矩阵 (nCompKer × fwSq)
+    nCompKer: 核分量数
+    kerOrder: 空间可变多项式阶数
+    fwKernel: 核全宽; hwKernel: 核半宽
+    kcStep: 核缓存步长
+    rPixX, rPixY: region 半宽归一化分母
+    xSize, ySize: 图像尺寸
+    返回 (allKernels, nstepsX, nstepsY): 预计算的所有块核矩阵、X/Y方向块数
+    """
+    # fwSq = fwKernel * fwKernel
     halfX, halfY = 0.5 * rPixX, 0.5 * rPixY
     nstepsX = int(np.ceil(xSize / kcStep))
     nstepsY = int(np.ceil(ySize / kcStep))
@@ -39,16 +52,39 @@ def buildAllKernels(kernelSol, kernelVec2d, nCompKer, kerOrder, fwKernel, hwKern
 
     return allKernels, nstepsX, nstepsY
 
+# numba jit 空间域卷积核，按 kcStep 块遍历像素做卷积 + variance + mask 传播
 @numba.jit(nopython=True, parallel=True)
 def spatial_convolve_jit_kernel(
-    image, variance, cMask,
-    cRdata, vData, mRData,
-    kernelSol,
-    xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
-    kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
-    kernel_vec_2d,
-    allKernels=None,
-    nstepsX_in=None):
+    image: np.ndarray, variance: np.ndarray, cMask: np.ndarray,
+    cRdata: np.ndarray, vData: np.ndarray, mRData: np.ndarray,
+    kernelSol: np.ndarray,
+    xSize: int, ySize: int, nCompKer: int, kerOrder: int, fwKernel: int, hwKernel: int,
+    kcStep: int, rPixX: int, rPixY: int, kerFracMask: float, dovar: int, convolveVariance: int,
+    kernel_vec_2d: np.ndarray,
+    allKernels: Optional[np.ndarray] = None,
+    nstepsX_in: Optional[int] = None) -> None:
+    """按 kcStep 块遍历像素，对每个锚点构造空间可变卷积核（或使用预计算 allKernels），完成空间域卷积、variance 计算和 mask 标记传播。结果原地写入 cRdata/vData/mRData。支持 numba 并行。
+
+    image: 输入图像 1D 数组 (xSize × ySize)
+    variance: 输入 variance 1D 数组，供卷积方差计算
+    cMask: 输入 mask 1D 数组，用于标记坏像素
+    cRdata: 输出卷积结果 1D 数组，原地写入
+    vData: 输出 variance 1D 数组，原地写入
+    mRData: 输出 mask 1D 数组，原地更新
+    kernelSol: 核多项式系数向量
+    xSize, ySize: 图像尺寸
+    nCompKer: 核分量数
+    kerOrder: 核多项式阶数
+    fwKernel, hwKernel: 核全宽和半宽
+    kcStep: 核缓存步长（块大小）
+    rPixX, rPixY: region 半宽归一化分母
+    kerFracMask: mask 分数阈值（低于此值的核像素被标记）
+    dovar: 是否计算 variance
+    convolveVariance: 是否卷积 variance 本身（vs 平方卷积）
+    kernel_vec_2d: 核基函数 2D 矩阵
+    allKernels: 预计算的所有块核矩阵，None 时在线计算
+    nstepsX_in: X 方向块数（allKernels 不为 None 时必须传入）
+    """
 
     fwSq = fwKernel * fwKernel
     FLAG_INPUT_ISBAD = np.int32(0x80)
@@ -146,8 +182,20 @@ def spatial_convolve_jit_kernel(
                         else:
                             mRData[ni] = mRData[ni] | FLAG_OK_CONV
 
+# 将多项式背景叠加到输出图像上（原地修改 oRData1d）
 @numba.jit(nopython=True)
-def background_loop_jit(oRData1d, kernelSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel):
+def background_loop_jit(oRData1d: np.ndarray, kernelSol: np.ndarray, nCompKer: int, kerOrder: int, bgOrder: int, rPixX: int, rPixY: int, hwKernel: int) -> None:
+    """遍历图像有效区域（跳过核半宽的边界像素），将多项式背景叠加到输出图像上。背景系数从 kernelSol 中按 nCompKer 和 kerOrder 定位，对区域内每个像素计算归一化坐标的多项式展开并累加到 oRData1d。
+
+    oRData1d: 输出图像 1D 数组，原地修改
+    kernelSol: 核拟合解向量，背景多项式系数存储在其后半段
+    nCompKer: 核分量数，用于定位背景系数偏移
+    kerOrder: 核多项式阶数，决定背景系数起始位置的计算
+    bgOrder: 背景多项式阶数
+    rPixX, rPixY: region 像素尺寸，用于像素坐标的归一化
+    hwKernel: 核半宽，边界跳过的像素数
+    """
+
     nCompForBG = nCompKer - 1
     ncompBG = nCompForBG * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
     halfX = np.float64(0.5 * rPixX)
@@ -169,7 +217,19 @@ def background_loop_jit(oRData1d, kernelSol, nCompKer, kerOrder, bgOrder, rPixX,
             oRData1d[i + rPixX * j] += bg
 
 @numba.jit(nopython=True)
-def get_final_stamp_sig_numpy(saXss, saYss, saSscnt, si, imDiff, imNoise, fwKSStamp, hwKSStamp, rPixX, mRData):
+# 获取单个 stamp 在最终输出图像上的信噪比
+def get_final_stamp_sig_numpy(saXss: np.ndarray, saYss: np.ndarray, saSscnt: np.ndarray, si: int, imDiff: np.ndarray, imNoise: np.ndarray, fwKSStamp: int, hwKSStamp: int, rPixX: int, mRData: np.ndarray) -> float:
+    """计算单个 stamp 在最终输出差图像上的信噪比。
+    saXss, saYss: stamps 的 X/Y 坐标数组 (nS × nKSStamps)
+    saSscnt: stamps 的已填充子 stamp 计数
+    si: stamp 索引
+    imDiff: 差图像 1D 数组
+    imNoise: 噪声图像 1D 数组
+    fwKSStamp: stamp 子区域全宽; hwKSStamp: 半宽
+    rPixX: region 的 X 像素数（用于 1D 索引计算）
+    mRData: mask 数据 1D 数组
+    返回 sig 值（方差加权平均），若 stamp 无效则返回 -1.0
+    """
     
     FLAG = np.int32(0x80)
     xRegion = saXss[si, saSscnt[si]]
@@ -193,8 +253,23 @@ def get_final_stamp_sig_numpy(saXss, saYss, saSscnt, si, imDiff, imNoise, fwKSSt
         sig = -1.0
     return sig
 
-def make_kernel_numpy(xi, yi, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKernel,
-                      kernel_vec, kernel_coeffs, kernel):
+# 在给定像素位置 (xi,yi) 构造空间可变卷积核，返回核元素之和
+def make_kernel_numpy(xi: int, yi: int, kernelSol: np.ndarray, rPixX: int, rPixY: int, nCompKer: int, kerOrder: int, fwKernel: int,
+                      kernel_vec: np.ndarray, kernel_coeffs: np.ndarray, kernel: np.ndarray) -> float:
+    """在给定像素位置 (xi,yi) 构造空间可变卷积核。计算该位置的归一化坐标，对每个核分量展开多项式并乘以 kernelSol 中的系数得到核多项式系数，再将系数与核基函数 kernel_vec 做线性组合得到完整卷积核。
+
+    xi, yi: 像素坐标
+    kernelSol: 核多项式系数向量
+    rPixX, rPixY: region 半宽归一化分母
+    nCompKer: 核分量数
+    kerOrder: 空间可变多项式阶数
+    fwKernel: 核全宽
+    kernel_vec: 核基函数列表 (nCompKer × fwSq)，用于基叠加
+    kernel_coeffs: 核系数数组 (nCompKer)，输出此像素处的多项式系数
+    kernel: 核数组 (fwSq)，输出此像素处的完整卷积核
+
+    返回 sumKernel: 核元素之和，用于归一化
+    """
     k = 2
     xf = (xi - 0.5 * rPixX) / (0.5 * rPixX)
     yf = (yi - 0.5 * rPixY) / (0.5 * rPixY)
@@ -222,7 +297,18 @@ def make_kernel_numpy(xi, yi, kernelSol, rPixX, rPixY, nCompKer, kerOrder, fwKer
         sum_kernel += val
     return sum_kernel
 
-def kernel_vector_pca_numpy(n, fwKernel, PCA, kernel_vec):
+# PCA 模式下从 PCA 基生成核向量
+def kernel_vector_pca_numpy(n: int, fwKernel: int, PCA: np.ndarray, kernel_vec: List[np.ndarray]) -> Tuple[np.ndarray, int]:
+    """PCA 模式下从 PCA 基矩阵生成核向量。n=0 时直接取 PCA 基，n>0 时取 PCA 基并减去 kernel_vec[0] 做正交化。
+
+    n: 高斯分量索引（决定使用 PCA 的哪一行）
+    fwKernel: 核全宽，也等于 PCA 每行的长度
+    PCA: PCA 基矩阵，每行为一个基向量
+    kernel_vec: 已生成的核向量列表，n>0 时取其第一个元素做正交化
+
+    返回 vector: 核向量 (fwSq 长度)
+    返回 ren: 是否需要后续正交化（n=0 时 0，否则 1）
+    """
     vector = np.zeros(fwKernel * fwKernel, dtype=np.float64)
     for i in range(fwKernel):
         for j in range(fwKernel):
@@ -234,8 +320,24 @@ def kernel_vector_pca_numpy(n, fwKernel, PCA, kernel_vec):
             vector[i] -= kernel0[i]
     return vector, ren
 
-def kernel_vector_numpy(n, deg_x, deg_y, ig, usePCA, fwKernel, hwKernel,
-                        sigma_gauss, filter_x, filter_y, kernel_vec, PCA):
+# 为单个高斯分量生成核向量基函数（高斯包络 × 多项式）
+def kernel_vector_numpy(n: int, deg_x: int, deg_y: int, ig: int, usePCA: int, fwKernel: int, hwKernel: int,
+                        sigma_gauss: List[float], filter_x: np.ndarray, filter_y: np.ndarray, kernel_vec: List[np.ndarray], PCA: Optional[np.ndarray]) -> Tuple[np.ndarray, int]:
+    """为单个高斯分量生成核向量基函数。对 fwKernel 个像素位置计算高斯包络乘以 X/Y 方向的多项式展开，得到可分离的 X/Y 滤波器，再做外积得到完整核向量。n>0 且 dx=dy=0 时对核向量做正交化。
+
+    n: 高斯分量序号，同时用作 filter_x/filter_y 的写入偏移
+    deg_x, deg_y: X/Y 方向多项式的阶数
+    ig: 高斯分量索引，用于取 sigma_gauss[ig]
+    usePCA: 是否使用 PCA 基（为真时直接调用 kernel_vector_pca_numpy）
+    fwKernel, hwKernel: 核全宽和半宽
+    sigma_gauss: 各高斯分量的 σ 值列表
+    filter_x, filter_y: 预分配的 X/Y 方向滤波器数组，原地写入当前分量的滤波器值
+    kernel_vec: 已生成核向量的列表，n>0 时用于正交化
+    PCA: PCA 基矩阵，usePCA 为真时传入
+
+    返回 vector: 核向量 (fwSq 长度)
+    返回 ren: 是否已做正交化（dx=dy=0 且 n>0 时为 1，否则 0）
+    """
     if usePCA:
         vec, ren = kernel_vector_pca_numpy(n, fwKernel, PCA, kernel_vec)
         return vec, ren
@@ -284,8 +386,21 @@ def kernel_vector_numpy(n, deg_x, deg_y, ig, usePCA, fwKernel, hwKernel,
 
     return vector, ren
 
-def get_kernel_vec_numpy(ngauss, deg_fixe, usePCA, fwKernel, hwKernel,
-                         sigma_gauss, filter_x, filter_y, PCA):
+# 遍历所有高斯分量和多项式阶数，生成完整核向量列表
+def get_kernel_vec_numpy(ngauss: int, deg_fixe: List[int], usePCA: int, fwKernel: int, hwKernel: int,
+                         sigma_gauss: List[float], filter_x: np.ndarray, filter_y: np.ndarray, PCA: Optional[np.ndarray]) -> List[np.ndarray]:
+    """遍历所有高斯分量和多项式阶数组合（嵌套三重循环），对每个组合调用 kernel_vector_numpy 生成核向量，收集为完整列表供后续卷积计算使用。
+
+    ngauss: 高斯分量个数
+    deg_fixe: 每个高斯分量的多项式阶数列表
+    usePCA: 是否使用 PCA 基
+    fwKernel, hwKernel: 核全宽和半宽
+    sigma_gauss: 各高斯分量的 σ 值列表，传入 kernel_vector_numpy
+    filter_x, filter_y: 预分配的滤波器数组，传入 kernel_vector_numpy 原地写入
+    PCA: PCA 基矩阵，usePCA 为真时传入
+
+    返回 kernel_vec: 核向量列表，长度为 nCompKer，每个元素为 fwSq 长度的 np.ndarray
+    """
     kernel_vec = []
     nvec = 0
     for ig in range(ngauss):
@@ -297,11 +412,25 @@ def get_kernel_vec_numpy(ngauss, deg_fixe, usePCA, fwKernel, hwKernel,
                 nvec += 1
     return kernel_vec
 
+# numba jit 构建最小二乘拟合矩阵（逐 stamp 累加）
 @numba.jit(nopython=True)
-def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
-                     wxy, matrix,
-                      nS, kerOrder, rPixX, rPixY,
-                      ncomp, ncomp1, ncomp2, nbg_vec, pixStamp):
+def build_matrix_jit(all_mat: np.ndarray, all_vectors: np.ndarray, valid_mask: np.ndarray, all_x: np.ndarray, all_y: np.ndarray,
+                     wxy: np.ndarray, matrix: np.ndarray,
+                     nS: int, kerOrder: int, rPixX: int, rPixY: int,
+                     ncomp: int, ncomp1: int, ncomp2: int, nbg_vec: int, pixStamp: int) -> None:
+    """逐 stamp 累加构建最小二乘拟合矩阵。遍历所有有效 stamp，对每个 stamp 计算其归一化坐标 (fx,fy) 的多项式 wxy 向量，将 wxy ⊗ wxy ⊗ all_mat 的三重积累加到输出 matrix 中。
+
+    all_mat: 每个 stamp 的局部矩阵 (nS × mat_size × mat_size) 或等效切片
+    all_vectors: 每个 stamp 的向量，此处仅用于类型编译，计算中不直接使用
+    valid_mask: 有效 stamp 掩码 (nS 长度 int32)
+    all_x, all_y: 每个 stamp 的当前子 stamp 中心坐标
+    wxy: 预计算的 wxy 矩阵 (nS × ncomp2)，由 build_matrix_numpy 预先传入
+    matrix: 输出矩阵 (mat_size+1 × mat_size+1)，原地累加修改
+    nS: stamps 总数
+    kerOrder: 核多项式阶数，用于 wxy 展开计算
+    rPixX, rPixY: region 半宽归一化分母
+    ncomp, ncomp1, ncomp2, nbg_vec, pixStamp: 编译时维度参数（numba jit 要求）
+    """
     rPixX2 = np.float64(0.5 * rPixX)
     rPixY2 = np.float64(0.5 * rPixY)
 
@@ -363,11 +492,26 @@ def build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                     q += all_vectors[istamp, ivecbg, kk] * all_vectors[istamp, ncomp1 + jbg + 1, kk]
                 matrix[ii + 1, ncomp + jbg + 2] += q
 
+# numba jit 构建标量积向量（逐 stamp 累加图像与核向量的点积）
 @numba.jit(nopython=True)
-def build_scprod_jit(all_vectors, all_scprod, valid_mask, all_x, all_y,
-                     wxy, image_flat, kernelSol,
-                     nS, fwKSStamp, hwKSStamp, rPixX,
-                     ncomp, ncomp1, ncomp2, nbg_vec):
+def build_scprod_jit(all_vectors: np.ndarray, all_scprod: np.ndarray, valid_mask: np.ndarray, all_x: np.ndarray, all_y: np.ndarray,
+                     wxy: np.ndarray, image_flat: np.ndarray, kernelSol: np.ndarray,
+                     nS: int, fwKSStamp: int, hwKSStamp: int, rPixX: int,
+                     ncomp: int, ncomp1: int, ncomp2: int, nbg_vec: int) -> None:
+    """逐 stamp 累加构建标量积向量 kernelSol。遍历所有有效 stamp，对每个 stamp 计算图像像素值与 stamp 向量的加权点积，累加到 kernelSol 中作为最小二乘拟合的右端项。
+
+    all_vectors: 每个 stamp 的向量 (nS × ncomp × fwSq) 或等效切片
+    all_scprod: 每个 stamp 的标量积 (nS × nC)，此处仅用于类型编译
+    valid_mask: 有效 stamp 掩码 (nS 长度 int32)
+    all_x, all_y: 每个 stamp 的当前子 stamp 中心坐标
+    wxy: 预计算的 wxy 矩阵 (nS × ncomp2)
+    image_flat: 展平的图像 1D 数组 (rPixX × rPixY)
+    kernelSol: 输出标量积向量，原地累加修改
+    nS: stamps 总数
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX: region 的 X 像素数
+    ncomp, ncomp1, ncomp2, nbg_vec: 编译时维度参数（numba jit 要求）
+    """
     for istamp in range(nS):
         if valid_mask[istamp] == 0:
             continue
@@ -392,8 +536,25 @@ def build_scprod_jit(all_vectors, all_scprod, valid_mask, all_x, all_y,
                     q += all_vectors[istamp, ncomp1 + ibg + 1, k] * image_flat[xc + xi + rPixX * (yc + yi)]
             kernelSol[ncomp + ibg + 2] += q
 
-def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nCompKer, kerOrder, bgOrder, fwKSStamp, rPixX, rPixY, nKSStamps=None):
-    
+# 打包 stamps 数据，调用 build_matrix_jit 构建拟合矩阵
+def build_matrix_numpy(saMat: np.ndarray, saVectors: np.ndarray, saSscnt: np.ndarray, saNss: np.ndarray, saXss: np.ndarray, saYss: np.ndarray, nS: int, nCompKer: int, kerOrder: int, bgOrder: int, fwKSStamp: int, rPixX: int, rPixY: int, nKSStamps: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """打包 stamps 数据并预计算 wxy 矩阵，调用 build_matrix_jit 构建最小二乘拟合矩阵。从 stamp 数组中提取有效 stamp 的向量和矩阵，计算 valid_mask，预计算每个 stamp 的空间多项式 wxy，然后调用 numba jit 函数完成累加。
+
+    saMat: stamps 的局部矩阵数组 (nS × nC × nC)
+    saVectors: stamps 的向量数组 (nS × nComp × fwSq)
+    saSscnt: stamps 的已填充子 stamp 计数
+    saNss: stamps 的子 stamp 总数上限
+    saXss, saYss: stamps 的 X/Y 坐标数组 (nS × nKSStamps)
+    nS: stamps 总数
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+    fwKSStamp: stamp 子区域全宽
+    rPixX, rPixY: region 像素尺寸
+    nKSStamps: 每个 stamp 的核测试子 stamp 数
+
+    返回 matrix: 拟合矩阵 (mat_size+1 × mat_size+1)
+    返回 wxy: 预计算的 wxy 矩阵 (nS × ncomp2)
+    """
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     ncomp = ncomp1 * ncomp2
@@ -444,7 +605,25 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
 
     return matrix, wxy
 
-def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=None):
+# 打包 stamps 数据，调用 build_scprod_jit 构建标量积
+def build_scprod_numpy(saScprod: np.ndarray, saVectors: np.ndarray, saSscnt: np.ndarray, saNss: np.ndarray, saXss: np.ndarray, saYss: np.ndarray, nS: int, image: np.ndarray, nCompKer: int, kerOrder: int, bgOrder: int, fwKSStamp: int, hwKSStamp: int, rPixX: int, wxy: np.ndarray, nKSStamps: Optional[int] = None) -> np.ndarray:
+    """打包 stamps 数据和图像，调用 build_scprod_jit 构建标量积向量 kernelSol。从 stamp 数组中提取有效 stamp 的向量和标量积，将图像展平为 1D 数组，预计算 valid_mask 和坐标，然后调用 numba jit 函数累加标量积。
+
+    saScprod: stamps 的局部标量积数组 (nS × nC)
+    saVectors: stamps 的向量数组 (nS × nComp × fwSq)
+    saSscnt, saNss: stamps 的已填充/总子 stamp 计数
+    saXss, saYss: stamps 的 X/Y 坐标数组 (nS × nKSStamps)
+    nS: stamps 总数
+    image: 输入图像 2D 数组 (rPixY × rPixX)
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX: region 的 X 像素数
+    wxy: 预计算的 wxy 矩阵 (nS × ncomp2)
+    nKSStamps: 每个 stamp 的核测试子 stamp 数
+
+    返回 kernelSol: 标量积向量 (ncomp + nbg_vec + 2 长度)
+    """
     # def build_scprod_numpy(stamps_dicts, nS, image, nCompKer, kerOrder, bgOrder, fwKSStamp, hwKSStamp, rPixX, wxy):
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
@@ -484,19 +663,42 @@ def build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss, nS, im
 
     return kernelSol
 
+# numba jit 批量填充 stamps 的向量/矩阵/标量积（kernel 级实现，原地写入）
 @numba.jit(nopython=True, parallel=True)
 def fill_stamp_numba_kernel_local(
-    image, imRef, filterX, filterY,
-    xi, yi, fwKSStamp, hwKSStamp, fwKernel, hwKernel,
-    rPixX, rPixY, nCompKer, bgOrder,
-    nvec, renFlags_arr, fillVal, mRData1d,
-    out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val,
-    n_stamps):
+    image: np.ndarray, imRef: np.ndarray, filterX: np.ndarray, filterY: np.ndarray,
+    xi: np.ndarray, yi: np.ndarray, fwKSStamp: int, hwKSStamp: int, fwKernel: int, hwKernel: int,
+    rPixX: int, rPixY: int, nCompKer: int, bgOrder: int,
+    nvec: int, renFlags_arr: np.ndarray, fillVal: float, mRData1d: np.ndarray,
+    out_vectors: np.ndarray, out_krefArea: np.ndarray, out_mat: np.ndarray, out_scprod: np.ndarray, out_sum_val: np.ndarray,
+    n_stamps: int) -> None:
+    """批量填充 stamps 的向量、矩阵和标量积（numba jit kernel 实现）。对每个有效 stamp，做 xy_conv_stamp 计算（图像与核滤波器的卷积），内联构建背景向量和核向量，计算局部矩阵和标量积，结果写入 out_vectors/out_mat/out_scprod 等输出数组。
+
+    image: 输入图像 1D 数组（供卷积用）
+    imRef: 参考图像 1D 数组（供卷积用）
+    filterX, filterY: 预计算的 X/Y 方向核滤波器数组
+    xi, yi: stamps 的 X/Y 坐标数组 (n_stamps 长度)
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    fwKernel, hwKernel: 核全宽和半宽
+    rPixX, rPixY: region 像素尺寸
+    nCompKer: 核分量数
+    bgOrder: 背景多项式阶数
+    nvec: 向量维度 (nCompKer + nBGVectors)
+    renFlags_arr: 正交化标志数组
+    fillVal: 填充值（用于无效像素）
+    mRData1d: mask 数据 1D 数组
+    out_vectors: 输出向量数组 (n_stamps × nvec × fwSqStamp)
+    out_krefArea: 输出参考区域数组 (n_stamps × fwSqStamp)
+    out_mat: 输出局部矩阵数组 (n_stamps × nC+1 × nC+1)
+    out_scprod: 输出局部标量积数组 (n_stamps × nC+1)
+    out_sum_val: 输出求和值数组 (n_stamps)
+    n_stamps: 本批次 stamp 数量
+    """
 
     LOCAL_FLAG_INPUT_ISBAD = 0x80
     fwSqStamp = fwKSStamp * fwKSStamp
     fwSqKernel = fwKernel * fwKernel
-    nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    # nbg = ((bgOrder + 1) * (bgOrder + 2)) // 2
 
     kernels = np.zeros((nvec, fwSqKernel), dtype=np.float64)
     for n in range(nvec):
@@ -607,9 +809,32 @@ def fill_stamp_numba_kernel_local(
 
     return 0
 
-def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, si, imConv, imRef, rPixX, rPixY, ngauss, deg_fixe,
-                     hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer,
-                     filter_x, filter_y, fillVal, mRData):
+# 填充单个 stamp 的向量、矩阵和标量积，返回 0 成功 / 1 跳过
+def fill_stamp_numpy(saVectors: np.ndarray, saMat: np.ndarray, saScprod: np.ndarray, saXss: np.ndarray, saYss: np.ndarray, saSscnt: np.ndarray, saNss: np.ndarray, saKrefArea: np.ndarray, saSumVal: np.ndarray, si: int, imConv: np.ndarray, imRef: np.ndarray, rPixX: int, rPixY: int, ngauss: int, deg_fixe: List[int],
+                     hwKSStamp: int, fwKSStamp: int, hwKernel: int, fwKernel: int, bgOrder: int, nCompKer: int,
+                     filter_x: np.ndarray, filter_y: np.ndarray, fillVal: float, mRData: np.ndarray) -> int:
+    """填充单个 stamp 的向量、矩阵和标量积。首先检查 stamp 是否有效（sscnt < nss），无效则跳过。有效时调用 fill_stamp_numba 批量填充（参数包装为单元素列表），并将结果写回 saVectors/saMat/saScprod 等数组。
+
+    saVectors, saMat, saScprod: stamps 的向量/矩阵/标量积数组，原地写入
+    saXss, saYss: stamps 的 X/Y 坐标数组
+    saSscnt, saNss: stamps 的已填充/总子 stamp 计数
+    saKrefArea: stamps 的参考区域数组
+    saSumVal: stamps 的求和值数组
+    si: stamp 索引
+    imConv, imRef: 卷积/参考图像 1D 数组
+    rPixX, rPixY: region 像素尺寸
+    ngauss: 高斯分量数
+    deg_fixe: 每个高斯分量的多项式阶数列表
+    hwKSStamp, fwKSStamp: stamp 子区域半宽和全宽
+    hwKernel, fwKernel: 核半宽和全宽
+    bgOrder: 背景多项式阶数
+    nCompKer: 核分量数
+    filter_x, filter_y: 预计算的核滤波器数组
+    fillVal: 填充值
+    mRData: mask 数据 1D 数组
+
+    返回 0 成功填充，返回 1 无效 stamp 跳过
+    """
     # 无效 stamp 快速返回
     if saSscnt[si] >= saNss[si]:
         return 1
@@ -631,9 +856,29 @@ def fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, s
     saSumVal[si] = out_sum_val[0]
     return 0
 
-def fill_stamp_numba(saXss, saYss, saSscnt, saNss, si_list, imConv, imRef, rPixX, rPixY, ngauss, deg_fixe,
-                     hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer,
-                     filter_x, filter_y, fillVal, mRData):
+# 批量 stamps 的填充入口，调用 fill_stamp_numba_kernel_local
+def fill_stamp_numba(saXss: np.ndarray, saYss: np.ndarray, saSscnt: np.ndarray, saNss: np.ndarray, si_list: List[int], imConv: np.ndarray, imRef: np.ndarray, rPixX: int, rPixY: int, ngauss: int, deg_fixe: List[int],
+                     hwKSStamp: int, fwKSStamp: int, hwKernel: int, fwKernel: int, bgOrder: int, nCompKer: int,
+                     filter_x: np.ndarray, filter_y: np.ndarray, fillVal: float, mRData: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """批量 stamps 的填充入口，收集有效 stamp 的坐标和图像数据，计算 renFlags 和核滤波器预计算，调用 fill_stamp_numba_kernel_local 完成批量填充。
+
+    saXss, saYss: stamps 的 X/Y 坐标数组 (nS × nKSStamps)
+    saSscnt, saNss: stamps 的已填充/总子 stamp 计数
+    si_list: 本批次 stamp 索引列表
+    imConv, imRef: 卷积/参考图像 1D 数组
+    rPixX, rPixY: region 像素尺寸
+    ngauss: 高斯分量数
+    deg_fixe: 每个高斯分量的多项式阶数列表
+    hwKSStamp, fwKSStamp: stamp 子区域半宽和全宽
+    hwKernel, fwKernel: 核半宽和全宽
+    bgOrder: 背景多项式阶数
+    nCompKer: 核分量数
+    filter_x, filter_y: 预计算的核滤波器数组
+    fillVal: 填充值
+    mRData: mask 数据 1D 数组
+
+    返回 (out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val)
+    """
     # si_list: 批次 stamp 索引列表
     n_stamps = len(si_list)
 
@@ -693,14 +938,33 @@ def fill_stamp_numba(saXss, saYss, saSscnt, saNss, si_list, imConv, imRef, rPixX
 
     return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[:, 0]
 
+# numba jit 批量计算所有 stamps 的信噪比（figMerit="v" 模式），结果写入 out_sig 数组
 @numba.jit(nopython=True)
 def get_stamp_sig_batch_jit(
-    sa_vectors, sa_krefArea, sa_sscnt, sa_nss, sa_xss, sa_yss,
-    kernelSol, imNoise, mRData1d,
-    fwKSStamp, hwKSStamp, rPixX, rPixY,
-    nCompKer, kerOrder, bgOrder, nS,
-    out_sig1, out_sig2, out_sig3,
-    batched_bg=None, batched_coeffs=None):
+    sa_vectors: np.ndarray, sa_krefArea: np.ndarray, sa_sscnt: np.ndarray, sa_nss: np.ndarray, sa_xss: np.ndarray, sa_yss: np.ndarray,
+    kernelSol: np.ndarray, imNoise: np.ndarray, mRData1d: np.ndarray,
+    fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int,
+    nCompKer: int, kerOrder: int, bgOrder: int, nS: int,
+    out_sig1: np.ndarray, out_sig2: np.ndarray, out_sig3: np.ndarray,
+    batched_bg: Optional[np.ndarray] = None, batched_coeffs: Optional[np.ndarray] = None) -> None:
+    """批量计算所有 stamps 的信噪比（figMerit="v" 方差模式）。遍历所有有效 stamp，对每个计算重建模型与图像的残差方差加权平均，结果写入 out_sig1/out_sig2/out_sig3 数组。支持传入预计算的 batched_bg 和 batched_coeffs 加速。
+
+    sa_vectors: stamps 的向量数组 (nS × nCompTotal × fwSqStamp)
+    sa_krefArea: stamps 的参考区域数组 (nS × fwSqStamp)
+    sa_sscnt, sa_nss: stamps 的已填充/总子 stamp 计数
+    sa_xss, sa_yss: stamps 的 X/Y 坐标数组
+    kernelSol: 核拟合解向量
+    imNoise: 噪声图像 1D 数组
+    mRData1d: mask 数据 1D 数组
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX, rPixY: region 像素尺寸
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+    nS: stamps 总数
+    out_sig1, out_sig2, out_sig3: 输出信噪比数组 (nS 长度)，原地写入
+    batched_bg: 预计算的所有 stamp 背景值，None 时在线计算
+    batched_coeffs: 预计算的核系数 (nS × nCompKer)，None 时在线计算
+    """
 
     LOCAL_ZEROVAL = 1e-10
     LOCAL_MAXVAL = 1e10
@@ -799,11 +1063,31 @@ def get_stamp_sig_batch_jit(
         out_sig2[si] = -1.0
         out_sig3[si] = -1.0
 
+# numba jit 单个 stamp 的信噪比计算，返回 (sig1, sig2, sig3, nsig)
 @numba.jit(nopython=True)
-def get_stamp_sig_jit(vectors, kernelSol, imNoise, mRData1d, im,
-                       fwKSStamp, hwKSStamp, rPixX, rPixY,
-                       nCompKer, kerOrder, bgOrder, xi, yi,
-                       temp):
+def get_stamp_sig_jit(vectors: np.ndarray, kernelSol: np.ndarray, imNoise: np.ndarray, mRData1d: np.ndarray, im: np.ndarray,
+                       fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int,
+                       nCompKer: int, kerOrder: int, bgOrder: int, xi: int, yi: int,
+                       temp: np.ndarray) -> Tuple[float, float, float, int]:
+    """计算单个 stamp 的信噪比。根据 figMerit 模式（方差 v/信号 s/直方图 h），在 stamp 子区域内遍历像素，计算模型重建值与数据的残差，返回不同定义下的信噪比和标志位。结果也写入 temp 数组供进一步统计用。
+
+    vectors: stamp 的向量 (nCompTotal × fwSqStamp)
+    kernelSol: 核拟合解向量
+    imNoise: 噪声图像 1D 数组
+    mRData1d: mask 数据 1D 数组
+    im: 图像 1D 数组（模板或科学图像）
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX, rPixY: region 像素尺寸
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+    xi, yi: stamp 子区域的中心坐标
+    temp: 临时数组 (fwSqStamp 长度)，用于写入每个像素的残差值
+
+    返回 sig1: 方差加权信噪比
+    返回 sig2: 信号加权信噪比（figMerit="s" 模式）
+    返回 sig3: 直方图信噪比（figMerit="h" 模式）
+    返回 nsig: 有效像素数
+    """
     LOCAL_ZEROVAL = 1e-10
     LOCAL_MAXVAL = 1e10
     LOCAL_FLAG_INPUT_ISBAD = 0x80
@@ -884,10 +1168,31 @@ def get_stamp_sig_jit(vectors, kernelSol, imNoise, mRData1d, im,
 
     return (sig1, sig2, sig3, nsig)
 
-def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask, kcStep,
-                                hwKernel, fwKernel,
-                                convolveVariance, kerFracMask,
-                                rPixX, rPixY, nCompKer, kerOrder, kernel_vec):
+# 快速空间域卷积：预计算所有 kcStep 块的核，调用 jit kernel 一次遍历完成卷积+variance+mask
+def spatial_convolve_fast_numpy(image: np.ndarray, variance: np.ndarray, xSize: int, ySize: int, kernelSol: np.ndarray, cMask: np.ndarray, kcStep: int,
+                                hwKernel: int, fwKernel: int,
+                                convolveVariance: int, kerFracMask: float,
+                                rPixX: int, rPixY: int, nCompKer: int, kerOrder: int, kernel_vec: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """快速空间域卷积：预计算所有 kcStep 块的核，调用 spatial_convolve_jit_kernel 一次遍历完成卷积、variance 计算和 mask 标记。将图像和 variance 转换为 1D float64 数组，调用 buildAllKernels 预计算块核，然后启动 numba jit kernel 并行处理。
+
+    image: 输入图像 1D 或 2D 数组
+    variance: 输入 variance 数组，None 表示不计算 variance
+    xSize, ySize: 图像尺寸
+    kernelSol: 核多项式系数向量
+    cMask: 输入卷积 mask 1D 数组
+    kcStep: 核缓存步长
+    hwKernel, fwKernel: 核半宽和全宽
+    convolveVariance: 是否卷积 variance 本身
+    kerFracMask: mask 分数阈值
+    rPixX, rPixY: region 像素尺寸
+    nCompKer: 核分量数
+    kerOrder: 核多项式阶数
+    kernel_vec: 核基函数列表，传入 buildAllKernels
+
+    返回 vData: variance 输出数组（dovar 为 False 时返回 None）
+    返回 cRdata_out: 卷积结果输出数组 (float32)
+    返回 mRData_out: mask 输出数组
+    """
 
     fwSq = fwKernel * fwKernel
     dovar = variance is not None
@@ -928,12 +1233,37 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
     mRData_out = mRData64
     return vData, cRdata_out, mRData_out
 
-def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, saYss,
-                       saVectors, saKrefArea, nS, imRef, imNoise, nCompKer, kerOrder, bgOrder,
-                       forceConvolve, figMerit,
-                       kerSigReject, statSig, fwKSStamp, hwKSStamp,
-                       rPixX, rPixY, fwKernel, kernel_vec, mRData,
-                       nKSStamps=None):
+# 初始 stamps 质量检查：计算 merit 值，筛选合格 stamps 用于构建拟合矩阵
+def check_stamps_numpy(saScprod: np.ndarray, saMat: np.ndarray, saNorm: np.ndarray, saDiff: np.ndarray, saSscnt: np.ndarray, saNss: np.ndarray, saXss: np.ndarray, saYss: np.ndarray,
+                       saVectors: np.ndarray, saKrefArea: np.ndarray, nS: int, imRef: np.ndarray, imNoise: np.ndarray, nCompKer: int, kerOrder: int, bgOrder: int,
+                       forceConvolve: str, figMerit: str,
+                       kerSigReject: float, statSig: float, fwKSStamp: int, hwKSStamp: int,
+                       rPixX: int, rPixY: int, fwKernel: int, kernel_vec: np.ndarray, mRData: np.ndarray,
+                       nKSStamps: Optional[int] = None) -> float:
+    """初始 stamps 质量检查。对每个 stamp 计算 merit 值（基于标量积和矩阵重建的核均值与 stamp 自身值的偏差），筛选出偏差在 kerSigReject 倍标准差以内的合格 stamps。合格 stamps 的局部矩阵和标量积被用于构建核拟合矩阵。
+
+    saScprod, saMat: stamps 的标量积和矩阵数组
+    saNorm, saDiff: stamps 的归一化和偏差值数组，输出
+    saSscnt, saNss: stamps 的已填充/总子 stamp 计数
+    saXss, saYss: stamps 的 X/Y 坐标数组
+    saVectors, saKrefArea: stamps 的向量和参考区域数组
+    nS: stamps 总数
+    imRef, imNoise: 参考图像和噪声图像数组
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+    forceConvolve: 强制卷积方向 ("t"/"i")
+    figMerit: 品质指标类型 ("v"/"s"/"h")
+    kerSigReject: 核拟合的 sigma 拒绝阈值
+    statSig: sigma-clip 的 sigma 阈值
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX, rPixY: region 像素尺寸
+    fwKernel: 核全宽
+    kernel_vec: 核基函数列表
+    mRData: mask 数据数组
+    nKSStamps: 每个 stamp 的核测试子 stamp 数
+
+    返回 merit: 当前品质指标值（用于方向选择）
+    """
 
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
@@ -1041,7 +1371,7 @@ def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, s
             mRDataArr = np.asarray(mRData, dtype=np.int64)
             imArr = np.asarray(im, dtype=np.float64)
 
-            figMerit_is_v = 1 if figMerit[0:1] == "v" else 0
+            # figMerit_is_v = 1 if figMerit[0:1] == "v" else 0
             temp = np.zeros(fwKSStamp * fwKSStamp, dtype=np.float64)
 
             sig1, sig2, sig3, nsig = get_stamp_sig_jit(
@@ -1117,11 +1447,38 @@ def check_stamps_numpy(saScprod, saMat, saNorm, saDiff, saSscnt, saNss, saXss, s
 
     return 0.0
 
-def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saKrefArea, kernelSol,
-                      imNoise,
-                      nS, figMerit, kerSigReject, statSig,
-                      fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
-                      nCompKer, kerOrder, bgOrder):
+# 迭代核拟合中的 stamps 再检查：计算信噪比，sigma-clip 剔除异常 stamp，生成重填列表
+def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray, saXss: np.ndarray, saYss: np.ndarray, saVectors: np.ndarray, saKrefArea: np.ndarray, kernelSol: np.ndarray,
+                      imNoise: np.ndarray,
+                      nS: int, figMerit: str, kerSigReject: float, statSig: float,
+                      fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int, mRData: np.ndarray,
+                      nCompKer: int, kerOrder: int, bgOrder: int) -> Tuple[int, float, float, int, List[int], np.ndarray, np.ndarray]:
+    """迭代核拟合中的 stamps 再检查和重填。对当前核拟合解计算每个 stamp 的信噪比，用 sigma-clip 剔除异常 stamp（chi2 偏离均值超 kerSigReject 倍标准差），生成需要重填的 stamp 索引列表和更新的 sscnt/chi2 数组供 fill_stamp_numpy 重填。
+
+    saSscnt, saNss: stamps 的已填充/总子 stamp 计数
+    saChi2: stamps 的卡方值数组，更新
+    saXss, saYss: stamps 的 X/Y 坐标数组
+    saVectors, saKrefArea: stamps 的向量和参考区域数组
+    kernelSol: 当前核拟合解向量
+    imNoise: 噪声图像数组
+    nS: stamps 总数
+    figMerit: 品质指标类型
+    kerSigReject: 核拟合的 sigma 拒绝阈值
+    statSig: sigma-clip 的 sigma 阈值
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX, rPixY: region 像素尺寸
+    mRData: mask 数据数组
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+
+    返回 check: 是否有 stamp 被重填（0/1）
+    返回 meansigSubstamps: 所有 stamps 的平均信噪比
+    返回 scatterSubstamps: 信噪比的弥散度
+    返回 nskippedSubstamps: 被跳过的 stamp 数
+    返回 refill_indices: 需要重填的 stamp 索引列表
+    返回 sscnt_update: 更新后的 sscnt 数组 (nS 长度)
+    返回 chi2_update: 更新后的 chi2 数组 (nS 长度)
+    """
 
     ss = np.zeros(nS, dtype=np.float32)
     nss = 0
@@ -1213,7 +1570,7 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saKrefAre
                 mRDataArr = np.asarray(mRData, dtype=np.int64)
                 imArr = np.asarray(im, dtype=np.float64)
 
-                figMerit_is_v = 1 if figMerit[0:1] == "v" else 0
+                # figMerit_is_v = 1 if figMerit[0:1] == "v" else 0
                 temp = np.zeros(fwKSStamp * fwKSStamp, dtype=np.float64)
 
                 sig1, sig2, sig3, nsig = get_stamp_sig_jit(
@@ -1293,11 +1650,34 @@ def check_again_numpy(saSscnt, saNss, saChi2, saXss, saYss, saVectors, saKrefAre
     return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
             refill_indices, sscnt_local, chi2_local)
 
-def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
-                     nS, fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
-                      kerSigReject, statSig, mRData, ngauss, deg_fixe,
-                      hwKernel, fwKernel, filter_x, filter_y, fillVal,
-                      logger=None):
+# 迭代核拟合主循环：构建矩阵→求解→检查→重填，直到收敛或达到最大迭代
+def fit_kernel_numpy(sa: Dict, imRef: np.ndarray, imConv: np.ndarray, imNoise: np.ndarray, nCompKer: int, kerOrder: int, bgOrder: int,
+                     nS: int, fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int, figMerit: str,
+                     kerSigReject: float, statSig: float, mRData: np.ndarray, ngauss: int, deg_fixe: List[int],
+                     hwKernel: int, fwKernel: int, filter_x: np.ndarray, filter_y: np.ndarray, fillVal: float,
+                     logger: Optional = None) -> Dict:
+    """迭代核拟合主循环。迭代过程：从 stamps 数组中提取数据 → build_matrix_numpy 构建拟合矩阵 → build_scprod_numpy 构建标量积 → np.linalg.solve 求解 → check_again_numpy 检查并重填异常的 stamp。重复直到所有 stamp 收敛或达到最大迭代次数。
+
+    sa: stamps 字典数组，包含 vectors/mat/scprod/xss/yss 等字段
+    imRef, imConv, imNoise: 参考图像、卷积图像、噪声图像数组
+    nCompKer: 核分量数
+    kerOrder, bgOrder: 核和背景的多项式阶数
+    nS: stamps 总数
+    fwKSStamp, hwKSStamp: stamp 子区域全宽和半宽
+    rPixX, rPixY: region 像素尺寸
+    figMerit: 品质指标类型 ("v"/"s"/"h")
+    kerSigReject: 核拟合的 sigma 拒绝阈值
+    statSig: sigma-clip 的 sigma 阈值
+    mRData: mask 数据数组
+    ngauss: 高斯分量数
+    deg_fixe: 每个高斯分量的多项式阶数列表
+    hwKernel, fwKernel: 核半宽和全宽
+    filter_x, filter_y: 预计算的核滤波器数组
+    fillVal: 填充值
+    logger: 日志记录器
+
+    返回字典包含 kernelSol/meansigSubstamps/scatterSubstamps/NskippedSubstamps/stamps
+    """
     ncomp1 = nCompKer - 1
     ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
     nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
@@ -1315,10 +1695,10 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     saScprod   = sa['scprod']
     saKrefArea = sa['krefArea']
     saSumVal   = sa['sum_val']
-    saX0       = sa['x0']
-    saY0       = sa['y0']
+    # saX0       = sa['x0']
+    # saY0       = sa['y0']
     saChi2     = sa['chi2']
-    nC         = sa['nC']
+    # nC         = sa['nC']
     nKSStamps  = sa['nKSStamps']
 
     # import time
