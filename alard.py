@@ -440,18 +440,6 @@ def build_matrix_jit(all_mat: np.ndarray, all_vectors: np.ndarray, valid_mask: n
 
         xstamp = all_x[istamp]
         ystamp = all_y[istamp]
-        fx = np.float64((np.float64(xstamp) - rPixX2) / rPixX2)
-        fy = np.float64((np.float64(ystamp) - rPixY2) / rPixY2)
-
-        kk = 0
-        a1 = 1.0
-        for ideg1 in range(kerOrder + 1):
-            a2 = 1.0
-            for ideg2 in range(kerOrder - ideg1 + 1):
-                wxy[istamp, kk] = a1 * a2
-                kk += 1
-                a2 *= fy
-            a1 *= fx
 
         for i in range(ncomp):
             i1 = i // ncomp2
@@ -473,23 +461,17 @@ def build_matrix_jit(all_mat: np.ndarray, all_vectors: np.ndarray, valid_mask: n
             ii = ncomp + ibg + 1
             ivecbg = ncomp1 + ibg + 1
             for i1 in range(1, ncomp1 + 1):
-                p0 = 0.0
-                for kk in range(pixStamp):
-                    p0 += all_vectors[istamp, i1, kk] * all_vectors[istamp, ivecbg, kk]
+                p0 = np.dot(all_vectors[istamp, i1, :], all_vectors[istamp, ivecbg, :])
 
                 for i2 in range(ncomp2):
                     jj = (i1 - 1) * ncomp2 + i2 + 1
                     matrix[ii + 1, jj + 1] += p0 * wxy[istamp, i2]
 
-            p0 = 0.0
-            for kk in range(pixStamp):
-                p0 += all_vectors[istamp, 0, kk] * all_vectors[istamp, ivecbg, kk]
+            p0 = np.dot(all_vectors[istamp, 0, :], all_vectors[istamp, ivecbg, :])
             matrix[ii + 1, 1] += p0
 
             for jbg in range(ibg + 1):
-                q = 0.0
-                for kk in range(pixStamp):
-                    q += all_vectors[istamp, ivecbg, kk] * all_vectors[istamp, ncomp1 + jbg + 1, kk]
+                q = np.dot(all_vectors[istamp, ivecbg, :], all_vectors[istamp, ncomp1 + jbg + 1, :])
                 matrix[ii + 1, ncomp + jbg + 2] += q
 
 # numba jit 构建标量积向量（逐 stamp 累加图像与核向量的点积）
@@ -512,6 +494,17 @@ def build_scprod_jit(all_vectors: np.ndarray, all_scprod: np.ndarray, valid_mask
     rPixX: region 的 X 像素数
     ncomp, ncomp1, ncomp2, nbg_vec: 编译时维度参数（numba jit 要求）
     """
+    pixStamp = fwKSStamp * fwKSStamp
+    so_x = np.empty(pixStamp, dtype=np.int64)
+    so_y = np.empty(pixStamp, dtype=np.int64)
+    idx = 0
+    for xc in range(-hwKSStamp, hwKSStamp + 1):
+        for yc in range(-hwKSStamp, hwKSStamp + 1):
+            so_x[idx] = xc
+            so_y[idx] = yc
+            idx += 1
+
+    img_patch = np.empty(pixStamp, dtype=np.float64)
     for istamp in range(nS):
         if valid_mask[istamp] == 0:
             continue
@@ -528,13 +521,10 @@ def build_scprod_jit(all_vectors: np.ndarray, all_scprod: np.ndarray, valid_mask
                 ii = (i1 - 1) * ncomp2 + i2 + 1
                 kernelSol[ii + 1] += p0 * wxy[istamp, i2]
 
+        for k in range(pixStamp):
+            img_patch[k] = image_flat[so_x[k] + xi + rPixX * (so_y[k] + yi)]
         for ibg in range(nbg_vec):
-            q = 0.0
-            for xc in range(-hwKSStamp, hwKSStamp + 1):
-                for yc in range(-hwKSStamp, hwKSStamp + 1):
-                    k = xc + hwKSStamp + fwKSStamp * (yc + hwKSStamp)
-                    q += all_vectors[istamp, ncomp1 + ibg + 1, k] * image_flat[xc + xi + rPixX * (yc + yi)]
-            kernelSol[ncomp + ibg + 2] += q
+            kernelSol[ncomp + ibg + 2] += np.dot(all_vectors[istamp, ncomp1 + ibg + 1, :], img_patch)
 
 # 打包 stamps 数据，调用 build_matrix_jit 构建拟合矩阵
 def build_matrix_numpy(saMat: np.ndarray, saVectors: np.ndarray, saSscnt: np.ndarray, saNss: np.ndarray, saXss: np.ndarray, saYss: np.ndarray, nS: int, nCompKer: int, kerOrder: int, bgOrder: int, fwKSStamp: int, rPixX: int, rPixY: int, nKSStamps: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
@@ -583,10 +573,9 @@ def build_matrix_numpy(saMat: np.ndarray, saVectors: np.ndarray, saSscnt: np.nda
     # nC = sa.nC
     nC_valid = nCompKer + 1
     # all_mat = np.zeros((nS, nC_valid, nC_valid), dtype=np.float64)
-    all_mat = saMat[:, :nC_valid, :nC_valid].copy()
+    all_mat = saMat[:nS, :nC_valid, :nC_valid]
     nvec_total = nCompKer + nbg_vec
-    # all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
-    all_vectors = saVectors[:, :nvec_total, :].copy()
+    all_vectors = saVectors[:nS, :nvec_total, :]
     # for i in range(nS):
     #     if valid_mask[i]:
     #         all_mat[i] = stamps_dicts[i]['mat'][:nC_valid, :nC_valid]
@@ -594,14 +583,26 @@ def build_matrix_numpy(saMat: np.ndarray, saVectors: np.ndarray, saSscnt: np.nda
 
     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
 
+    rPixX2 = np.float64(0.5 * rPixX); rPixY2 = np.float64(0.5 * rPixY)
+    for s in range(nS):
+        if valid_mask[s] == 0:
+            continue
+        fx = (np.float64(all_x[s]) - rPixX2) / rPixX2
+        fy = (np.float64(all_y[s]) - rPixY2) / rPixY2
+        kk = 0; a1 = 1.0
+        for ideg1 in range(kerOrder + 1):
+            a2 = 1.0
+            for ideg2 in range(kerOrder - ideg1 + 1):
+                wxy[s, kk] = a1 * a2; kk += 1; a2 *= fy
+            a1 *= fx
+
     build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
                      wxy, matrix, nS, kerOrder, rPixX, rPixY,
                      ncomp, ncomp1, ncomp2, nbg_vec,
                      pixStamp)
 
-    for i in range(mat_size):
-        for j in range(i + 1):
-            matrix[j + 1, i + 1] = matrix[i + 1, j + 1]
+    tri_i, tri_j = np.tril_indices(mat_size, -1)
+    matrix[tri_j + 1, tri_i + 1] = matrix[tri_i + 1, tri_j + 1]
 
     return matrix, wxy
 
@@ -939,7 +940,7 @@ def fill_stamp_numba(saXss: np.ndarray, saYss: np.ndarray, saSscnt: np.ndarray, 
     return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[:, 0]
 
 # numba jit 批量计算所有 stamps 的信噪比（figMerit="v" 模式），结果写入 out_sig 数组
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, parallel=True)
 def get_stamp_sig_batch_jit(
     sa_vectors: np.ndarray, sa_krefArea: np.ndarray, sa_sscnt: np.ndarray, sa_nss: np.ndarray, sa_xss: np.ndarray, sa_yss: np.ndarray,
     kernelSol: np.ndarray, imNoise: np.ndarray, mRData1d: np.ndarray,
@@ -972,7 +973,7 @@ def get_stamp_sig_batch_jit(
     LOCAL_FLAG_ISNAN = 0x08
     fwSq = fwKSStamp * fwKSStamp
 
-    for si in range(nS):
+    for si in numba.prange(nS):
         scnt = sa_sscnt[si]
         if scnt >= sa_nss[si]:
             out_sig1[si] = -1.0
