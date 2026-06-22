@@ -474,6 +474,80 @@ def build_matrix_jit(all_mat: np.ndarray, all_vectors: np.ndarray, valid_mask: n
                 q = np.dot(all_vectors[istamp, ivecbg, :], all_vectors[istamp, ncomp1 + jbg + 1, :])
                 matrix[ii + 1, ncomp + jbg + 2] += q
 
+# numba jit 合并构建 matrix + kernelSol（一次 jit 调用完成两个操作）
+@numba.jit(nopython=True)
+def build_both_jit(all_mat: np.ndarray, all_vectors: np.ndarray, all_scprod: np.ndarray,
+                    valid_mask: np.ndarray, all_x: np.ndarray, all_y: np.ndarray,
+                    wxy: np.ndarray, matrix: np.ndarray, kernelSol: np.ndarray,
+                    image_flat: np.ndarray,
+                    nS: int, kerOrder: int, fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int,
+                    ncomp: int, ncomp1: int, ncomp2: int, nbg_vec: int, pixStamp: int) -> None:
+    """一次 jit 调用完成 build_matrix + build_scprod。先累加 matrix，再累加 kernelSol。"""
+    # === build_matrix ===
+    for istamp in range(nS):
+        if valid_mask[istamp] == 0:
+            continue
+
+        for i in range(ncomp):
+            i1 = i // ncomp2
+            i2 = i - i1 * ncomp2
+            for j in range(i + 1):
+                j1 = j // ncomp2
+                j2 = j - j1 * ncomp2
+                matrix[i + 2, j + 2] += wxy[istamp, i2] * wxy[istamp, j2] * all_mat[istamp, i1 + 2, j1 + 2]
+
+        matrix[1, 1] += all_mat[istamp, 1, 1]
+        for i in range(ncomp):
+            i1 = i // ncomp2
+            i2 = i - i1 * ncomp2
+            matrix[i + 2, 1] += wxy[istamp, i2] * all_mat[istamp, i1 + 2, 1]
+
+        for ibg in range(nbg_vec):
+            ii = ncomp + ibg + 1
+            ivecbg = ncomp1 + ibg + 1
+            for i1 in range(1, ncomp1 + 1):
+                p0 = np.dot(all_vectors[istamp, i1, :], all_vectors[istamp, ivecbg, :])
+                for i2 in range(ncomp2):
+                    jj = (i1 - 1) * ncomp2 + i2 + 1
+                    matrix[ii + 1, jj + 1] += p0 * wxy[istamp, i2]
+            p0 = np.dot(all_vectors[istamp, 0, :], all_vectors[istamp, ivecbg, :])
+            matrix[ii + 1, 1] += p0
+            for jbg in range(ibg + 1):
+                q = np.dot(all_vectors[istamp, ivecbg, :], all_vectors[istamp, ncomp1 + jbg + 1, :])
+                matrix[ii + 1, ncomp + jbg + 2] += q
+
+    # === build_scprod ===
+    so_x = np.empty(pixStamp, dtype=np.int64)
+    so_y = np.empty(pixStamp, dtype=np.int64)
+    idx = 0
+    for xc in range(-hwKSStamp, hwKSStamp + 1):
+        for yc in range(-hwKSStamp, hwKSStamp + 1):
+            so_x[idx] = xc
+            so_y[idx] = yc
+            idx += 1
+
+    img_patch = np.empty(pixStamp, dtype=np.float64)
+    for istamp in range(nS):
+        if valid_mask[istamp] == 0:
+            continue
+
+        xi = all_x[istamp]
+        yi = all_y[istamp]
+
+        p0 = all_scprod[istamp, 1]
+        kernelSol[1] += p0
+
+        for i1 in range(1, ncomp1 + 1):
+            p0 = all_scprod[istamp, i1 + 1]
+            for i2 in range(ncomp2):
+                ii = (i1 - 1) * ncomp2 + i2 + 1
+                kernelSol[ii + 1] += p0 * wxy[istamp, i2]
+
+        for k in range(pixStamp):
+            img_patch[k] = image_flat[so_x[k] + xi + rPixX * (so_y[k] + yi)]
+        for ibg in range(nbg_vec):
+            kernelSol[ncomp + ibg + 2] += np.dot(all_vectors[istamp, ncomp1 + ibg + 1, :], img_patch)
+
 # numba jit 构建标量积向量（逐 stamp 累加图像与核向量的点积）
 @numba.jit(nopython=True)
 def build_scprod_jit(all_vectors: np.ndarray, all_scprod: np.ndarray, valid_mask: np.ndarray, all_x: np.ndarray, all_y: np.ndarray,
@@ -645,10 +719,9 @@ def build_scprod_numpy(saScprod: np.ndarray, saVectors: np.ndarray, saSscnt: np.
     #     return np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
 
     # all_scprod = np.zeros((nS, nCompKer + 1), dtype=np.float64)
-    all_scprod = saScprod[:, :nCompKer + 1].copy()
+    all_scprod = saScprod[:nS, :nCompKer + 1]
     nvec_total = nCompKer + nbg_vec
-    # all_vectors = np.zeros((nS, nvec_total, pixStamp), dtype=np.float64)
-    all_vectors = saVectors[:, :nvec_total, :].copy()
+    all_vectors = saVectors[:nS, :nvec_total, :]
     # for i in range(nS):
     #     if valid_mask[i]:
     #         all_scprod[i] = stamps_dicts[i]['scprod'][:nCompKer + 1]
@@ -663,6 +736,63 @@ def build_scprod_numpy(saScprod: np.ndarray, saVectors: np.ndarray, saSscnt: np.
                      ncomp, ncomp1, ncomp2, nbg_vec)
 
     return kernelSol
+
+# 合并打包：一次准备数据，一次 jit 调用完成 matrix + kernelSol
+def build_both_numpy(saMat: np.ndarray, saVectors: np.ndarray, saScprod: np.ndarray,
+                     saSscnt: np.ndarray, saNss: np.ndarray, saXss: np.ndarray, saYss: np.ndarray,
+                     nS: int, image: np.ndarray, nCompKer: int, kerOrder: int, bgOrder: int,
+                     fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int, nKSStamps: Optional[int] = None
+                     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ncomp1 = nCompKer - 1
+    ncomp2 = ((kerOrder + 1) * (kerOrder + 2)) // 2
+    ncomp = ncomp1 * ncomp2
+    nbg_vec = ((bgOrder + 1) * (bgOrder + 2)) // 2
+    pixStamp = fwKSStamp * fwKSStamp
+    mat_size = ncomp1 * ncomp2 + nbg_vec + 1
+
+    wxy = np.zeros((nS, ncomp2), dtype=np.float64)
+    valid_mask = (saSscnt[:nS] < saNss[:nS]).astype(np.int32)
+    n_valid = valid_mask.sum()
+    if n_valid == 0:
+        matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
+        kernelSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+        return matrix, kernelSol, wxy
+    safe_sscnt = np.clip(saSscnt[:nS], 0, nKSStamps - 1)
+    all_x = np.where(valid_mask, saXss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
+    all_y = np.where(valid_mask, saYss[:nS][np.arange(nS), safe_sscnt], 0).astype(np.int64)
+
+    rPixX2 = np.float64(0.5 * rPixX); rPixY2 = np.float64(0.5 * rPixY)
+    for s in range(nS):
+        if valid_mask[s] == 0:
+            continue
+        fx = (np.float64(all_x[s]) - rPixX2) / rPixX2
+        fy = (np.float64(all_y[s]) - rPixY2) / rPixY2
+        kk = 0; a1 = 1.0
+        for ideg1 in range(kerOrder + 1):
+            a2 = 1.0
+            for ideg2 in range(kerOrder - ideg1 + 1):
+                wxy[s, kk] = a1 * a2; kk += 1; a2 *= fy
+            a1 *= fx
+
+    nC_valid = nCompKer + 1
+    all_mat = saMat[:nS, :nC_valid, :nC_valid]
+    nvec_total = nCompKer + nbg_vec
+    all_vectors = saVectors[:nS, :nvec_total, :]
+    all_scprod = saScprod[:nS, :nCompKer + 1]
+
+    matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
+    kernelSol = np.zeros(ncomp + nbg_vec + 2, dtype=np.float64)
+    image_arr = np.asarray(image, dtype=np.float64)
+
+    build_both_jit(all_mat, all_vectors, all_scprod, valid_mask, all_x, all_y,
+                   wxy, matrix, kernelSol, image_arr,
+                   nS, kerOrder, fwKSStamp, hwKSStamp, rPixX, rPixY,
+                   ncomp, ncomp1, ncomp2, nbg_vec, pixStamp)
+
+    tri_i, tri_j = np.tril_indices(mat_size, -1)
+    matrix[tri_j + 1, tri_i + 1] = matrix[tri_i + 1, tri_j + 1]
+
+    return matrix, kernelSol, wxy
 
 # numba jit 批量填充 stamps 的向量/矩阵/标量积（kernel 级实现，原地写入）
 @numba.jit(nopython=True, parallel=True)
@@ -1549,17 +1679,21 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
             batch_sig1, batch_sig2, batch_sig3,
             batched_bg=batched_bg, batched_coeffs=batched_coeffs4)
 
-    for istamp in range(nS):
-        if sscnt_local[istamp] < saNss[istamp]:
-            if batch_sig1 is not None:
-                sig1 = batch_sig1[istamp]
-                sig2 = batch_sig2[istamp]
-                sig3 = batch_sig3[istamp]
-            else:
-                # sig1, sig2, sig3 = get_stamp_sig_numpy(
-                #     sa, istamp, kernelSol, imNoise,
-                #     fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
-                #     figMerit, statSig, nCompKer, kerOrder, bgOrder)
+    if batch_sig1 is not None:
+        valid_mask_j = sscnt_local < saNss[:nS]
+        bad_mask = valid_mask_j & (batch_sig1 == -1)
+        sscnt_local[bad_mask] += 1
+        refill_indices.extend(np.where(bad_mask)[0].tolist())
+        if np.any(bad_mask):
+            check = 1
+        good_mask = valid_mask_j & ~bad_mask
+        chi2_local[good_mask] = batch_sig1[good_mask]
+        ng = good_mask.sum()
+        ss[:ng] = batch_sig1[good_mask]
+        nss = ng
+    else:
+        for istamp in range(nS):
+            if sscnt_local[istamp] < saNss[istamp]:
                 # 内联 get_stamp_sig_numpy 逻辑，使用扁平数组
                 sscnt = sscnt_local[istamp]
                 xRegion = int(saXss[istamp, sscnt])
@@ -1597,56 +1731,36 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
                         elif sig3 < 0 or sig3 >= MAXVAL:
                             sig3 = -1.0
 
-            if (figMerit[0:1] == "v" and sig1 == -1) or \
-               (figMerit[0:1] == "s" and sig2 == -1) or \
-               (figMerit[0:1] == "h" and sig3 == -1):
-                sscnt_local[istamp] += 1
-                # fill_stamp_numpy(sa, istamp, imConv, imRef, rPixX, rPixY, verbose,
-                #                  ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                #                  bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
-                #                  PCA, fillVal, mRData)
-                refill_indices.append(istamp)
-                check = 1
-            else:
-                if figMerit[0:1] == "v":
-                    sig = sig1
-                elif figMerit[0:1] == "s":
-                    sig = sig2
-                elif figMerit[0:1] == "h":
-                    sig = sig3
+                if (figMerit[0:1] == "v" and sig1 == -1) or \
+                   (figMerit[0:1] == "s" and sig2 == -1) or \
+                   (figMerit[0:1] == "h" and sig3 == -1):
+                    sscnt_local[istamp] += 1
+                    refill_indices.append(istamp)
+                    check = 1
+                else:
+                    if figMerit[0:1] == "v":
+                        sig = sig1
+                    elif figMerit[0:1] == "s":
+                        sig = sig2
+                    elif figMerit[0:1] == "h":
+                        sig = sig3
 
-                chi2_local[istamp] = sig
-                ss[nss] = sig
-                nss += 1
-        else:
-            nskippedSubstamps += 1
+                    chi2_local[istamp] = sig
+                    ss[nss] = sig
+                    nss += 1
+            else:
+                nskippedSubstamps += 1
 
     mean, stdev, retcode = sigma_clip_numpy(ss[:nss], maxiter=10, stat_sig=statSig)
 
     meansigSubstamps = mean
     scatterSubstamps = stdev
 
-    scnt = 0
-    for istamp in range(nS):
-        # if stamps[istamp]['sscnt'] < stamps[istamp]['nss']:
-        if sscnt_local[istamp] < saNss[istamp]:
-            # if (stamps[istamp]['chi2'] - mean) > kerSigReject * stdev:
-            if (chi2_local[istamp] - mean) > kerSigReject * stdev:
-                # stamps[istamp]['sscnt'] += 1
-                sscnt_local[istamp] += 1
-                # rc = fill_stamp_numpy(stamps[istamp], imConv, imRef, rPixX, rPixY, verbose,
-                #                       ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                #                       bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
-                #                       PCA, fillVal, mRData)
-                # rc = fill_stamp_numpy(sa, istamp, imConv, imRef, rPixX, rPixY, verbose,
-                #                       ngauss, deg_fixe, hwKSStamp, fwKSStamp, hwKernel, fwKernel,
-                #                       bgOrder, nCompKer, kerOrder, usePCA, filter_x, filter_y,
-                #                       PCA, fillVal, mRData)
-                # scnt += (1 if rc == 0 else 0)
-                refill_indices.append(istamp)
-                check = 1
-            else:
-                scnt += 1
+    mask = (sscnt_local < saNss[:nS]) & ((chi2_local - mean) > kerSigReject * stdev)
+    sscnt_local[mask] += 1
+    refill_indices.extend(np.where(mask)[0].tolist())
+    if np.any(mask):
+        check = 1
 
     return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
             refill_indices, sscnt_local, chi2_local)
@@ -1706,13 +1820,10 @@ def fit_kernel_numpy(sa: Dict, imRef: np.ndarray, imConv: np.ndarray, imNoise: n
     iter_count = 0
     # t_start = time.time()
     logger.debug("  fitKernel: iteration %d start", iter_count)
-    matrix, wxy = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
-                                    nS, nCompKer, kerOrder, bgOrder,
-                                    fwKSStamp, rPixX, rPixY, nKSStamps=nKSStamps)
-    kernelSol = build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss,
-                                   nS, imRef, nCompKer, kerOrder, bgOrder,
-                                   fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=nKSStamps)
-    logger.debug("  fitKernel: build_matrix0+scprod0 done")
+    matrix, kernelSol, wxy = build_both_numpy(saMat, saVectors, saScprod, saSscnt, saNss, saXss, saYss,
+                                               nS, imRef, nCompKer, kerOrder, bgOrder,
+                                               fwKSStamp, hwKSStamp, rPixX, rPixY, nKSStamps=nKSStamps)
+    logger.debug("  fitKernel: build_matrix+scprod done")
     # tm_bm = time.time(); logger.debug("  fitKernel: build+scprod %.3fs", tm_bm - tm)
 
     # indx = np.zeros(mat_size + 1, dtype=np.int32)
@@ -1720,7 +1831,6 @@ def fit_kernel_numpy(sa: Dict, imRef: np.ndarray, imConv: np.ndarray, imNoise: n
         matrix[1:mat_size+1, 1:mat_size+1], kernelSol[1:mat_size+1])
     logger.debug("  fitKernel: solve done")
     # tm_slv = time.time(); logger.debug("  fitKernel: solve %.3fs", tm_slv - tm_bm)
-
 
     (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
      refill_indices, sscnt_update, chi2_update) = check_again_numpy(
@@ -1742,13 +1852,9 @@ def fit_kernel_numpy(sa: Dict, imRef: np.ndarray, imConv: np.ndarray, imNoise: n
         iter_count += 1
         logger.debug("  fitKernel: iteration %d start", iter_count)
 
-        matrix, wxy = build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss,
-                                        nS, nCompKer, kerOrder, bgOrder,
-                                        fwKSStamp, rPixX, rPixY, nKSStamps=nKSStamps)
-        
-        kernelSol = build_scprod_numpy(saScprod, saVectors, saSscnt, saNss, saXss, saYss,
-                                       nS, imRef, nCompKer, kerOrder, bgOrder,
-                                       fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=nKSStamps)
+        matrix, kernelSol, wxy = build_both_numpy(saMat, saVectors, saScprod, saSscnt, saNss, saXss, saYss,
+                                                   nS, imRef, nCompKer, kerOrder, bgOrder,
+                                                   fwKSStamp, hwKSStamp, rPixX, rPixY, nKSStamps=nKSStamps)
         logger.debug("  fitKernel: build_matrix+scprod done")
 
         kernelSol[1:mat_size+1] = np.linalg.solve(

@@ -120,3 +120,25 @@
 4. **函数 5** — get_stamp_sig_batch_jit prange
 5. **函数 6** — check_again fom='s'/'h' 批量化
 6. **函数 7** — fit_kernel while 进 jit（最后，依赖前几项稳定）
+
+---
+
+## Phase 1 实际进展 (2026-06-23 commit 91c92b8 ~ current)
+
+| # | 函数 | 实际改动 | 当前 | 目标 |
+|:--:|------|------|:---:|:---:|
+| ✅ 1 | `build_matrix_jit` | wxy jit 外预计算 + BG 项 for kk → np.dot | 0.65s | ✅ |
+| ✅ 2 | `build_scprod_jit` | image gather 向量化 (np.dot+预计算offsets) | 0.03s | ✅ |
+| ✅ 3 | `build_matrix_numpy` | 去 .copy() + symmetry Python for → tril_indices | 0.02s | ✅ |
+| ✅ 3b | `build_scprod_numpy` | 去 .copy() | 0.02s | ✅ |
+| ✅ 5 | `get_stamp_sig_batch_jit` | prange 并行化 | 0.5s | ✅ |
+| ✅ 6 | `check_again_numpy` | 两个 Python for 循环 → numpy 向量化 | 0.8s | ✅ |
+| ✅ 7 | `fit_kernel_numpy` | build_both_jit 合并 (一次 jit 取代两次) | 1.0s | ✅ |
+
+### 最终基准
+
+| 配置 | 优化前 | 优化后 | 变化 |
+|------|:---:|:---:|:---:|
+| nrx=1 nry=1 (热态) | 2.85s | **2.35s** | **-17.5%** |
+| vs C 版 (3.36s) | 1.18x 慢 | **1.43x 快** | — |
+| maskOut | EXACT MATCH | **EXACT MATCH** | ✅ |
