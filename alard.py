@@ -1577,7 +1577,7 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
                     vectors, kSol, imNoiseArr, mRDataArr, imArr,
                     fwKSStamp, hwKSStamp, rPixX, rPixY,
                     nCompKer, kerOrder, bgOrder, xRegion, yRegion,
-                    figMerit_is_v, statSig, temp)
+                    temp)
 
                 if figMerit[0:1] != "v":
                     temp_2d = temp.reshape(fwKSStamp, fwKSStamp).astype(np.float32)
@@ -1585,12 +1585,12 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
                     result = get_stamp_stats3_numpy(temp_2d, xRegion - hwKSStamp, yRegion - hwKSStamp,
                                                     fwKSStamp, fwKSStamp,
                                                     0x0, 0xffff, 5, mRData_2d, statSig)
-                    if result['return_code'] != 0:
+                    if result[7] != 0:
                         sig2 = -1.0
                         sig3 = -1.0
                     else:
-                        sig2 = result['sd']
-                        sig3 = result['fwhm']
+                        sig2 = result[4]
+                        sig3 = result[5]
                         if sig2 < 0 or sig2 >= MAXVAL:
                             sig2 = -1.0
                         elif sig3 < 0 or sig3 >= MAXVAL:
