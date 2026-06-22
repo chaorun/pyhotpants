@@ -434,9 +434,9 @@ def build_matrix_numpy(saMat, saVectors, saSscnt, saNss, saXss, saYss, nS, nComp
     matrix = np.zeros((mat_size + 1, mat_size + 1), dtype=np.float64)
 
     build_matrix_jit(all_mat, all_vectors, valid_mask, all_x, all_y,
-                     wxy, matrix,
-                     nS, kerOrder, rPixX, rPixY,
-                     ncomp, ncomp1, ncomp2, nbg_vec, pixStamp)
+                     wxy, matrix, nS, kerOrder, rPixX, rPixY,
+                     ncomp, ncomp1, ncomp2, nbg_vec,
+                     pixStamp)
 
     for i in range(mat_size):
         for j in range(i + 1):
@@ -915,15 +915,11 @@ def spatial_convolve_fast_numpy(image, variance, xSize, ySize, kernelSol, cMask,
         nCompKer, kerOrder, fwKernel, hwKernel, kcStep,
         rPixX, rPixY, xSize, ySize)
 
-    spatial_convolve_jit_kernel(
-        image1d, var1d, cMask1d,
-        cRdata64, vData64, mRData64,
-        kernelSol.astype(np.float64),
+    spatial_convolve_jit_kernel(image1d, var1d, cMask1d,
+        cRdata64, vData64, mRData64, kernelSol.astype(np.float64),
         xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
-        kernel_vec_2d,
-        allKernels=allKernels,
-        nstepsX_in=nstepsX)
+        kernel_vec_2d, allKernels=allKernels, nstepsX_in=nstepsX)
 
     if dovar:
         vData = vData64.astype(np.float32)
@@ -1348,15 +1344,13 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
     (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
      refill_indices, sscnt_update, chi2_update) = check_again_numpy(
         saSscnt, saNss, saChi2, saXss, saYss, saVectors, saKrefArea, kernelSol,
-        imNoise,
-        nS, figMerit, kerSigReject, statSig,
-        fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
-        nCompKer, kerOrder, bgOrder)
+        imNoise, nS, figMerit, kerSigReject, statSig,
+        fwKSStamp, hwKSStamp, rPixX, rPixY, mRData, nCompKer, kerOrder, bgOrder)
     saSscnt[:nS] = sscnt_update
     saChi2[:nS] = chi2_update
 
     for idx in refill_indices:
-        fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, idx, imConv, imRef,         rPixX, rPixY, ngauss, deg_fixe,
+        fill_stamp_numpy(saVectors, saMat, saScprod, saXss, saYss, saSscnt, saNss, saKrefArea, saSumVal, idx, imConv, imRef, rPixX, rPixY, ngauss, deg_fixe,
                          hwKSStamp, fwKSStamp, hwKernel, fwKernel,
                          bgOrder, nCompKer, filter_x, filter_y,
                          fillVal, mRData)
@@ -1383,10 +1377,8 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
          refill_indices, sscnt_update, chi2_update) = check_again_numpy(
             saSscnt, saNss, saChi2, saXss, saYss, saVectors, saKrefArea, kernelSol,
-            imNoise,
-            nS, figMerit, kerSigReject, statSig,
-            fwKSStamp, hwKSStamp, rPixX, rPixY, mRData,
-            nCompKer, kerOrder, bgOrder)
+            imNoise, nS, figMerit, kerSigReject, statSig,
+            fwKSStamp, hwKSStamp, rPixX, rPixY, mRData, nCompKer, kerOrder, bgOrder)
         saSscnt[:nS] = sscnt_update
         saChi2[:nS] = chi2_update
 
@@ -1399,8 +1391,6 @@ def fit_kernel_numpy(sa, imRef, imConv, imNoise, nCompKer, kerOrder, bgOrder,
         # tm_ca = time.time(); logger.debug("  fitKernel: check_again %.3fs", tm_ca - tm_slv)
 
     return {'kernelSol': kernelSol,
-        'meansigSubstamps': meansigSubstamps,
-        'scatterSubstamps': scatterSubstamps,
-        'NskippedSubstamps': nskippedSubstamps,
-        'stamps': sa}
+        'meansigSubstamps': meansigSubstamps, 'scatterSubstamps': scatterSubstamps,
+        'NskippedSubstamps': nskippedSubstamps, 'stamps': sa}
 

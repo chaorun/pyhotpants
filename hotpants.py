@@ -2,6 +2,7 @@ import numpy as np
 import sys, os, struct
 import time as tm
 import logging
+from typing import List, Dict, Tuple, Optional
 from .functions import FLAG_BAD_PIXVAL, FLAG_SAT_PIXEL, FLAG_LOW_PIXEL
 from .functions import FLAG_INPUT_ISBAD, FLAG_OUTPUT_ISBAD
 from .functions import sigma_clip_numpy, get_noise_stats3_numpy
@@ -23,10 +24,10 @@ from .alard import check_stamps_numpy, fit_kernel_numpy
 #    fill_stamp_numba_kernel_local, fill_stamp_numpy, get_stamp_sig_batch_jit, get_stamp_sig_jit,spatial_convolve_jit_kernel, buildAllKernels,
 #check_again_numpy,
 
-def compute_ctx_info(hwKernel, ngauss, deg_fixe, kerOrder, bgOrder,
-                     nStampX_in, nStampY_in, hwKSStamp,
-                     useFullSS, kerFitThresh, kcStep_in,
-                     tNx, tNy, iNx, iNy, nR):
+def compute_ctx_info(hwKernel: int, ngauss: int, deg_fixe: List[int], kerOrder: int, bgOrder: int,
+                     nStampX_in: int, nStampY_in: int, hwKSStamp: int,
+                     useFullSS: int, kerFitThresh: float, kcStep_in: int,
+                     tNx: int, tNy: int, iNx: int, iNy: int, nR: int) -> Dict:
     nCompKer = 0
     for i in range(ngauss):
         nCompKer += ((deg_fixe[i] + 1) * (deg_fixe[i] + 2)) // 2
@@ -79,15 +80,15 @@ def compute_ctx_info(hwKernel, ngauss, deg_fixe, kerOrder, bgOrder,
         'xMin': xMin, 'yMin': yMin, 'xMax': xMax, 'yMax': yMax,
         'fitThresh': fitThresh, 'kcStep': kcStep}
 
-def region_setup_numpy(tmpl_2d, sci_2d, tnoise_2d, inoise_2d, tmask_2d, imask_2d,
-                        ri, rxmins_np, rxmaxs_np, rymins_np, rymaxs_np, nR,
-                        hwKernel, fwStamp, sBorder,
-                        xMin, yMin, xMax, yMax,
-                        fillVal, fillValNoise,
-                        tPedestal, iPedestal,
-                        tGain, tRdnoise, iGain, iRdnoise,
-                        tUThresh, tLThresh, iUThresh, iLThresh,
-                        kfSpreadMask1, logger=None):
+def region_setup_numpy(tmpl_2d: np.ndarray, sci_2d: np.ndarray, tnoise_2d: Optional[np.ndarray], inoise_2d: Optional[np.ndarray], tmask_2d: Optional[np.ndarray], imask_2d: Optional[np.ndarray],
+                        ri: int, rxmins_np: np.ndarray, rxmaxs_np: np.ndarray, rymins_np: np.ndarray, rymaxs_np: np.ndarray, nR: int,
+                        hwKernel: int, fwStamp: int, sBorder: int,
+                        xMin: int, yMin: int, xMax: int, yMax: int,
+                        fillVal: float, fillValNoise: float,
+                        tPedestal: float, iPedestal: float,
+                        tGain: float, tRdnoise: float, iGain: float, iRdnoise: float,
+                        tUThresh: float, tLThresh: float, iUThresh: float, iLThresh: float,
+                        kfSpreadMask1: float, logger: Optional[logging.Logger] = None) -> Dict:
     if logger is None:
         logger = logging.getLogger('hotpants')
     logger.debug("  region_setup: ri=%d rXMin=%d rXMax=%d rYMin=%d rYMax=%d",
@@ -208,17 +209,17 @@ def region_setup_numpy(tmpl_2d, sci_2d, tnoise_2d, inoise_2d, tmask_2d, imask_2d
     logger.debug("  region_setup: done rPixX=%d rPixY=%d fpixelOut=(%d,%d) lpixelOut=(%d,%d)",
                  rPixX, rPixY, fpixelOutX, fpixelOutY, lpixelOutX, lpixelOutY)
     return {'tRData': tRData_py, 'iRData': iRData_py,
-        'oRData': oRData_py, 'eRData': eRData_py,
-        'mRData': mRData_py, 'misRData': misRData_py, 'mtsRData': mtsRData_py,
-        'rXMin': rXMin, 'rYMin': rYMin, 'rXMax': rXMax, 'rYMax': rYMax,
-        'rXBMin': rXBMin, 'rYBMin': rYBMin, 'rXBMax': rXBMax, 'rYBMax': rYBMax,
-        'xBufLo': xBufLo, 'xBufHi': xBufHi, 'yBufLo': yBufLo, 'yBufHi': yBufHi,
-        'fpixelOutX': fpixelOutX, 'fpixelOutY': fpixelOutY,
-        'lpixelOutX': lpixelOutX, 'lpixelOutY': lpixelOutY,
-        'rPixX': rPixX, 'rPixY': rPixY}
+            'oRData': oRData_py, 'eRData': eRData_py,
+            'mRData': mRData_py, 'misRData': misRData_py, 'mtsRData': mtsRData_py,
+            'rXMin': rXMin, 'rYMin': rYMin, 'rXMax': rXMax, 'rYMax': rYMax,
+            'rXBMin': rXBMin, 'rYBMin': rYBMin, 'rXBMax': rXBMax, 'rYBMax': rYBMax,
+            'xBufLo': xBufLo, 'xBufHi': xBufHi, 'yBufLo': yBufLo, 'yBufHi': yBufHi,
+            'fpixelOutX': fpixelOutX, 'fpixelOutY': fpixelOutY,
+            'lpixelOutX': lpixelOutX, 'lpixelOutY': lpixelOutY,
+            'rPixX': rPixX, 'rPixY': rPixY}
 
 
-def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConvolve, logger=None):
+def region_buildstamps_numpy(setup_result: Dict, ctx_info: Dict, params_info: Dict, localForceConvolve: str, logger: Optional[logging.Logger] = None) -> Dict:
     logger.debug("region_buildstamps_numpy start")
 
     nCompKer = ctx_info['nCompKer']
@@ -357,7 +358,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
         if ctSa is not None:
             ctNss = ctSa['nss']; ctX0 = ctSa['x0']; ctY0 = ctSa['y0']; ctX = ctSa['x']; ctY = ctSa['y']
             ctSumVal = ctSa['sum_val']; ctMeanVal = ctSa['mean_val']; ctMedian = ctSa['median']; ctMode = ctSa['mode']
-            ctSd = ctSa['sd']; ctFwhm = ctSa['fwhm']; ctLfwhm = ctSa['lfwhm']; ctXss = ctSa['xss']; ctYss = ctSa['yss']; ctSscnt = ctSa['sscnt']
+            ctSd = ctSa['sd']; ctFwhm = ctSa['fwhm']; ctLfwhm = ctSa['lfwhm']; ctXss = ctSa['xss']; ctYss = ctSa['yss']  # ctSscnt = ctSa['sscnt']
         else:
             ctNss = np.zeros(1, dtype=np.int32); ctX0 = np.zeros(1, dtype=np.int32); ctY0 = np.zeros(1, dtype=np.int32)
             ctX = np.zeros(1, dtype=np.int32); ctY = np.zeros(1, dtype=np.int32)
@@ -368,7 +369,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
         if ciSa is not None:
             ciNss = ciSa['nss']; ciX0 = ciSa['x0']; ciY0 = ciSa['y0']; ciX = ciSa['x']; ciY = ciSa['y']
             ciSumVal = ciSa['sum_val']; ciMeanVal = ciSa['mean_val']; ciMedian = ciSa['median']; ciMode = ciSa['mode']
-            ciSd = ciSa['sd']; ciFwhm = ciSa['fwhm']; ciLfwhm = ciSa['lfwhm']; ciXss = ciSa['xss']; ciYss = ciSa['yss']; ciSscnt = ciSa['sscnt']
+            ciSd = ciSa['sd']; ciFwhm = ciSa['fwhm']; ciLfwhm = ciSa['lfwhm']; ciXss = ciSa['xss']; ciYss = ciSa['yss']  # ciSscnt = ciSa['sscnt']
         else:
             ciNss = np.zeros(1, dtype=np.int32); ciX0 = np.zeros(1, dtype=np.int32); ciY0 = np.zeros(1, dtype=np.int32)
             ciX = np.zeros(1, dtype=np.int32); ciY = np.zeros(1, dtype=np.int32)
@@ -475,20 +476,43 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
                         (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
                          lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
-                         lmRData) = buildStampsNumba(
-                             sXMin, sXMax, sYMin, sYMax, 1,
-                             rXBMin, rYBMin,
-                             ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
-                             ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
-                             ctXss[ntS].copy(), ctYss[ntS].copy(),
-                             ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
-                             ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
-                             ciXss[niS].copy(), ciYss[niS].copy(),
-                             iRData1d, tRData1d, 0, 0,
-                             localForceConvolve, rPixX, rPixY,
-                            tUKThresh, iUKThresh, hwKSStamp,
-                            fwStamp, nKSStamps, kerFitThresh,
-                            mRData1d.copy(), statSig)
+                         lmRData) = buildStampsNumba(sXMin, sXMax, sYMin,
+                                                          sYMax, 1, rXBMin,
+                                                          rYBMin, ctNss[ntS],
+                                                          ctX0[ntS], ctY0[ntS],
+                                                          ctX[ntS], ctY[ntS],
+                                                          ctSumVal[ntS],
+                                                          ctMeanVal[ntS],
+                                                          ctMedian[ntS],
+                                                          ctMode[ntS],
+                                                          ctSd[ntS],
+                                                          ctFwhm[ntS],
+                                                          ctLfwhm[ntS],
+                                                          ctXss[ntS].copy(),
+                                                          ctYss[ntS].copy(),
+                                                          ciNss[niS],
+                                                          ciX0[niS],
+                                                          ciY0[niS],
+                                                          ciX[niS],
+                                                          ciY[niS],
+                                                          ciSumVal[niS],
+                                                          ciMeanVal[niS],
+                                                          ciMedian[niS],
+                                                          ciMode[niS],
+                                                          ciSd[niS],
+                                                          ciFwhm[niS],
+                                                          ciLfwhm[niS],
+                                                          ciXss[niS].copy(),
+                                                          ciYss[niS].copy(),
+                                                          iRData1d, tRData1d, 0,
+                                                          0, localForceConvolve,
+                                                          rPixX, rPixY,
+                                                          tUKThresh, iUKThresh,
+                                                          hwKSStamp, fwStamp,
+                                                          nKSStamps,
+                                                          kerFitThresh,
+                                                          mRData1d.copy(),
+                                                          statSig)
                         ctX0[ntS], ctY0[ntS] = lctX0, lctY0
                         ctX[ntS], ctY[ntS] = lctX, lctY
                         ctSumVal[ntS], ctMeanVal[ntS] = lctSumVal, lctMeanVal
@@ -512,24 +536,47 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 else:
                     if useFullSS:
 
-                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
-                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
-                         lmRData) = buildStampsNumba(
-                            sXMin, sXMax, sYMin, sYMax, niS, ntS, 1,
-                            rXBMin, rYBMin,
-                            # ctSa 扁平
-                            ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
-                            ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
-                            ctXss[ntS].copy(), ctYss[ntS].copy(), ctSscnt[ntS],
-                            # ciSa 扁平
-                            ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
-                            ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
-                            ciXss[niS].copy(), ciYss[niS].copy(), ciSscnt[niS],
-                            iRData1d, tRData1d, 0, 0,
-                            verbose, localForceConvolve, rPixX, rPixY,
-                            tUKThresh, iUKThresh, hwKSStamp,
-                            fwStamp, nKSStamps, kerFitThresh,
-                            mRData1d.copy(), statSig)
+                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal,
+                         lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal,
+                         lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+                         lmRData) = buildStampsNumba(sXMin, sXMax, sYMin,
+                                                          sYMax, 1, rXBMin,
+                                                          rYBMin, ctNss[ntS],
+                                                          ctX0[ntS], ctY0[ntS],
+                                                          ctX[ntS], ctY[ntS],
+                                                          ctSumVal[ntS],
+                                                          ctMeanVal[ntS],
+                                                          ctMedian[ntS],
+                                                          ctMode[ntS],
+                                                          ctSd[ntS],
+                                                          ctFwhm[ntS],
+                                                          ctLfwhm[ntS],
+                                                          ctXss[ntS].copy(),
+                                                          ctYss[ntS].copy(),
+                                                          ciNss[niS],
+                                                          ciX0[niS],
+                                                          ciY0[niS],
+                                                          ciX[niS],
+                                                          ciY[niS],
+                                                          ciSumVal[niS],
+                                                          ciMeanVal[niS],
+                                                          ciMedian[niS],
+                                                          ciMode[niS],
+                                                          ciSd[niS],
+                                                          ciFwhm[niS],
+                                                          ciLfwhm[niS],
+                                                          ciXss[niS].copy(),
+                                                          ciYss[niS].copy(),
+                                                          iRData1d, tRData1d, 0,
+                                                          0, localForceConvolve,
+                                                          rPixX, rPixY,
+                                                          tUKThresh, iUKThresh,
+                                                          hwKSStamp, fwStamp,
+                                                          nKSStamps,
+                                                          kerFitThresh,
+                                                          mRData1d.copy(),
+                                                          statSig)
                         # 写回
                         ctX0[ntS], ctY0[ntS] = lctX0, lctY0
                         ctX[ntS], ctY[ntS] = lctX, lctY
@@ -554,22 +601,47 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
 
                     else:
 
-                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
-                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal, lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
-                         lmRData) = buildStampsNumba(
-                             sXMin, sXMax, sYMin, sYMax, 1,
-                             rXBMin, rYBMin,
-                             ctNss[ntS], ctX0[ntS], ctY0[ntS], ctX[ntS], ctY[ntS],
-                             ctSumVal[ntS], ctMeanVal[ntS], ctMedian[ntS], ctMode[ntS], ctSd[ntS], ctFwhm[ntS], ctLfwhm[ntS],
-                             ctXss[ntS].copy(), ctYss[ntS].copy(),
-                             ciNss[niS], ciX0[niS], ciY0[niS], ciX[niS], ciY[niS],
-                             ciSumVal[niS], ciMeanVal[niS], ciMedian[niS], ciMode[niS], ciSd[niS], ciFwhm[niS], ciLfwhm[niS],
-                             ciXss[niS].copy(), ciYss[niS].copy(),
-                             iRData1d, tRData1d, 0, 0,
-                             localForceConvolve, rPixX, rPixY,
-                            tUKThresh, iUKThresh, hwKSStamp,
-                            fwStamp, nKSStamps, kerFitThresh,
-                            mRData1d.copy(), statSig)
+                        (lctX0, lctY0, lctX, lctY, lctSumVal, lctMeanVal, 
+                         lctMedian, lctMode, lctSd, lctFwhm, lctLfwhm, lctNss, lctXss, lctYss,
+                         lciX0, lciY0, lciX, lciY, lciSumVal, lciMeanVal,
+                         lciMedian, lciMode, lciSd, lciFwhm, lciLfwhm, lciNss, lciXss, lciYss,
+                         lmRData) = buildStampsNumba(sXMin, sXMax, sYMin,
+                                                          sYMax, 1, rXBMin,
+                                                          rYBMin, ctNss[ntS],
+                                                          ctX0[ntS], ctY0[ntS],
+                                                          ctX[ntS], ctY[ntS],
+                                                          ctSumVal[ntS],
+                                                          ctMeanVal[ntS],
+                                                          ctMedian[ntS],
+                                                          ctMode[ntS],
+                                                          ctSd[ntS],
+                                                          ctFwhm[ntS],
+                                                          ctLfwhm[ntS],
+                                                          ctXss[ntS].copy(),
+                                                          ctYss[ntS].copy(),
+                                                          ciNss[niS],
+                                                          ciX0[niS],
+                                                          ciY0[niS],
+                                                          ciX[niS],
+                                                          ciY[niS],
+                                                          ciSumVal[niS],
+                                                          ciMeanVal[niS],
+                                                          ciMedian[niS],
+                                                          ciMode[niS],
+                                                          ciSd[niS],
+                                                          ciFwhm[niS],
+                                                          ciLfwhm[niS],
+                                                          ciXss[niS].copy(),
+                                                          ciYss[niS].copy(),
+                                                          iRData1d, tRData1d, 0,
+                                                          0, localForceConvolve,
+                                                          rPixX, rPixY,
+                                                          tUKThresh, iUKThresh,
+                                                          hwKSStamp, fwStamp,
+                                                          nKSStamps,
+                                                          kerFitThresh,
+                                                          mRData1d.copy(),
+                                                          statSig)
                         ctX0[ntS], ctY0[ntS] = lctX0, lctY0
                         ctX[ntS], ctY[ntS] = lctX, lctY
                         ctSumVal[ntS], ctMeanVal[ntS] = lctSumVal, lctMeanVal
@@ -624,9 +696,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
             logger.info("Too few stamps were fit, scaling down fitting threshold to %.2f", kerFitThresh)
 
             if localForceConvolve != "i":
-                # ctStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
-                #             for _ in range(nStamps)]
-                # ctSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+
                 nVec = nCompKer + nBGVectors
                 fwSq = fwKSStamp * fwKSStamp
                 ct = {}
@@ -662,9 +732,7 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
                 ct['nVec'] = nVec
                 ctSa = ct
             if localForceConvolve != "t":
-                # ciStamps = [allocate_stamp_dict(nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
-                #             for _ in range(nStamps)]
-                # ciSa = StampsArray(nStamps, nKSStamps, fwKSStamp, nCompKer, nBGVectors, nC)
+
                 nVec = nCompKer + nBGVectors
                 fwSq = fwKSStamp * fwKSStamp
                 ci = {}
@@ -705,19 +773,16 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
         status += 1
 
     if (niS == 0) and (ntS == 0):
-
         result = {'niS': niS, 'ntS': ntS, 'ctStamps': ctSa, 'ciStamps': ciSa,
               'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
         return result
     if localForceConvolve == "i":
         if niS == 0:
-
             result = {'niS': niS, 'ntS': ntS, 'ctStamps': ctSa, 'ciStamps': ciSa,
                   'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
             return result
     if localForceConvolve == "t":
         if ntS == 0:
-
             result = {'niS': niS, 'ntS': ntS, 'ctStamps': ctSa, 'ciStamps': ciSa,
                   'kernel_vec': None, 'filter_x': None, 'filter_y': None, 'status': -1}
             return result
@@ -733,13 +798,13 @@ def region_buildstamps_numpy(setup_result, ctx_info, params_info, localForceConv
     return result
 
 
-def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, localForceConvolve, logger=None):
+def region_fit_numpy(buildstamps_result: Dict, setup_result: Dict, ctx_info: Dict, params_info: Dict, localForceConvolve: str, logger: Optional[logging.Logger] = None) -> Dict:
     logger.debug("region_fit_numpy start")
 
     nCompKer = ctx_info['nCompKer']
-    nBGVectors = ctx_info['nBGVectors']
+    # nBGVectors = ctx_info['nBGVectors']
     nC = ctx_info['nC']
-    nCompTotal = ctx_info['nCompTotal']
+    # nCompTotal = ctx_info['nCompTotal']
     fwKSStamp = ctx_info['fwKSStamp']
     fwKernel = ctx_info['fwKernel']
 
@@ -749,9 +814,9 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     kerOrder = params_info['kerOrder']
     bgOrder = params_info['bgOrder']
     hwKSStamp = params_info['hwKSStamp']
-    verbose = params_info.get('verbose', 0)
-    usePCA = params_info.get('usePCA', 0)
-    PCA = params_info.get('PCA', None)
+    # verbose = params_info.get('verbose', 0)
+    # usePCA = params_info.get('usePCA', 0)
+    # PCA = params_info.get('PCA', None)
     statSig = params_info['statSig']
     kerSigReject = params_info['kerSigReject']
     fillVal = params_info['fillVal']
@@ -779,36 +844,58 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     filter_x = buildstamps_result['filter_x']
     filter_y = buildstamps_result['filter_y']
     # 扁平数组字段（从 ctSa/ciSa dict 读取，替代原来 build_stamps_flatten_helper 展开的字段）
-    ctSscnt = ctSa['sscnt'] if ctSa is not None else None
-    ctNss = ctSa['nss'] if ctSa is not None else None
-    ctVectors = ctSa['vectors'] if ctSa is not None else None
-    ctMat = ctSa['mat'] if ctSa is not None else None
-    ctScprod = ctSa['scprod'] if ctSa is not None else None
-    ctXss = ctSa['xss'] if ctSa is not None else None
-    ctYss = ctSa['yss'] if ctSa is not None else None
-    ctKrefArea = ctSa['krefArea'] if ctSa is not None else None
-    ctSumVal = ctSa['sum_val'] if ctSa is not None else None
-    ctX0 = ctSa['x0'] if ctSa is not None else None
-    ctY0 = ctSa['y0'] if ctSa is not None else None
-    ctNorm = ctSa['norm'] if ctSa is not None else None
-    ctDiff = ctSa['diff'] if ctSa is not None else None
-    ctNKSStamps = ctSa['nKSStamps'] if ctSa is not None else params_info.get('nKSStamps')
-    ctNC = ctSa['nC'] if ctSa is not None else ctx_info.get('nC')
-    ciSscnt = ciSa['sscnt'] if ciSa is not None else None
-    ciNss = ciSa['nss'] if ciSa is not None else None
-    ciVectors = ciSa['vectors'] if ciSa is not None else None
-    ciMat = ciSa['mat'] if ciSa is not None else None
-    ciScprod = ciSa['scprod'] if ciSa is not None else None
-    ciXss = ciSa['xss'] if ciSa is not None else None
-    ciYss = ciSa['yss'] if ciSa is not None else None
-    ciKrefArea = ciSa['krefArea'] if ciSa is not None else None
-    ciSumVal = ciSa['sum_val'] if ciSa is not None else None
-    ciX0 = ciSa['x0'] if ciSa is not None else None
-    ciY0 = ciSa['y0'] if ciSa is not None else None
-    ciNorm = ciSa['norm'] if ciSa is not None else None
-    ciDiff = ciSa['diff'] if ciSa is not None else None
-    ciNKSStamps = ciSa['nKSStamps'] if ciSa is not None else params_info.get('nKSStamps')
-    ciNC = ciSa['nC'] if ciSa is not None else ctx_info.get('nC')
+    if ctSa is not None:
+        ctSscnt = ctSa['sscnt']
+        ctNss = ctSa['nss']
+        ctVectors = ctSa['vectors']
+        ctMat = ctSa['mat']
+        ctScprod = ctSa['scprod']
+        ctXss = ctSa['xss']
+        ctYss = ctSa['yss']
+        ctKrefArea = ctSa['krefArea']
+        ctSumVal = ctSa['sum_val']
+        ctNorm = ctSa['norm']
+        ctDiff = ctSa['diff']
+        ctNKSStamps = ctSa['nKSStamps']
+    else:
+        ctSscnt = None
+        ctNss = None
+        ctVectors = None
+        ctMat = None
+        ctScprod = None
+        ctXss = None
+        ctYss = None
+        ctKrefArea = None
+        ctSumVal = None
+        ctNorm = None
+        ctDiff = None
+        ctNKSStamps = params_info.get('nKSStamps')
+    if ciSa is not None:
+        ciSscnt = ciSa['sscnt']
+        ciNss = ciSa['nss']
+        ciVectors = ciSa['vectors']
+        ciMat = ciSa['mat']
+        ciScprod = ciSa['scprod']
+        ciXss = ciSa['xss']
+        ciYss = ciSa['yss']
+        ciKrefArea = ciSa['krefArea']
+        ciSumVal = ciSa['sum_val']
+        ciNorm = ciSa['norm']
+        ciDiff = ciSa['diff']
+        ciNKSStamps = ciSa['nKSStamps']
+    else:
+        ciSscnt = None
+        ciNss = None
+        ciVectors = None
+        ciMat = None
+        ciScprod = None
+        ciXss = None
+        ciYss = None
+        ciKrefArea = None
+        ciSumVal = None
+        ciNorm = None
+        ciDiff = None
+        ciNKSStamps = params_info.get('nKSStamps')
 
     tMerit = 0.0
     iMerit = 0.0
@@ -823,7 +910,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
         if ct_si_list:
             # 批量调用 fill_stamp_numba
             ct_out = fill_stamp_numba(ctXss, ctYss, ctSscnt, ctNss, ct_si_list,
-                                       tRData1d, iRData1d,                                        rPixX, rPixY, ngauss, deg_fixe,
+                                       tRData1d, iRData1d, rPixX, rPixY, ngauss, deg_fixe,
                                        hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer,
                                        filter_x, filter_y, fillVal, mRData1d)
             ct_out_v, ct_out_k, ct_out_m, ct_out_s, ct_out_sum = ct_out
@@ -839,9 +926,8 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
                 ctSumVal[si] = ct_out_sum[bi]
         if localForceConvolve == "b":
             logger.info("Trying to convolve the TEMPLATE to fit IMAGE")
-            tMerit = check_stamps_numpy(
-                ctScprod, ctMat, ctNorm, ctDiff, ctSscnt, ctNss, ctXss, ctYss,
-                ctVectors, ctKrefArea, ntS, iRData1d, oRData1d,
+            tMerit = check_stamps_numpy(ctScprod, ctMat, ctNorm, ctDiff, ctSscnt,
+                ctNss, ctXss, ctYss, ctVectors, ctKrefArea, ntS, iRData1d, oRData1d,
                 nCompKer, kerOrder, bgOrder,
                 localForceConvolve, figMerit, kerSigReject, statSig,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
@@ -859,7 +945,7 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
         ci_si_list = [k for k in range(niS) if ciSscnt[k] < ciNss[k]]
         if ci_si_list:
             ci_out = fill_stamp_numba(ciXss, ciYss, ciSscnt, ciNss, ci_si_list,
-                                       iRData1d, tRData1d,                                        rPixX, rPixY, ngauss, deg_fixe,
+                                       iRData1d, tRData1d, rPixX, rPixY, ngauss, deg_fixe,
                                        hwKSStamp, fwKSStamp, hwKernel, fwKernel, bgOrder, nCompKer,
                                        filter_x, filter_y, fillVal, mRData1d)
             ci_out_v, ci_out_k, ci_out_m, ci_out_s, ci_out_sum = ci_out
@@ -875,9 +961,8 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
         if localForceConvolve == "b":
             logger.info("Trying to convolve the IMAGE to fit TEMPLATE")
 
-            iMerit = check_stamps_numpy(
-                ciScprod, ciMat, ciNorm, ciDiff, ciSscnt, ciNss, ciXss, ciYss,
-                ciVectors, ciKrefArea, niS, tRData1d, oRData1d,
+            iMerit = check_stamps_numpy(ciScprod, ciMat, ciNorm, ciDiff, ciSscnt,
+                ciNss, ciXss, ciYss, ciVectors, ciKrefArea, niS, tRData1d, oRData1d,
                 nCompKer, kerOrder, bgOrder,
                 localForceConvolve, figMerit, kerSigReject, statSig,
                 fwKSStamp, hwKSStamp, rPixX, rPixY, fwKernel,
@@ -903,14 +988,14 @@ def region_fit_numpy(buildstamps_result, setup_result, ctx_info, params_info, lo
     return result
 
 
-def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
-                                 ctx_info, params_info, region_idx, localForceConvolve, logger=None):
+def region_convolve_diff_numpy(fit_result: Dict, setup_result: Dict, buildstamps_result: Dict,
+                                 ctx_info: Dict, params_info: Dict, region_idx: int, localForceConvolve: str, logger: Optional[logging.Logger] = None) -> Dict:
 
 
     nCompKer = ctx_info['nCompKer']
-    nBGVectors = ctx_info['nBGVectors']
-    nC = ctx_info['nC']
-    nStamps = ctx_info['nStamps']
+    # nBGVectors = ctx_info['nBGVectors']
+    # nC = ctx_info['nC']
+    # nStamps = ctx_info['nStamps']
     fwKSStamp = ctx_info['fwKSStamp']
     fwKernel = ctx_info['fwKernel']
     kcStep = ctx_info['kcStep']
@@ -921,9 +1006,9 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
     kerOrder = params_info['kerOrder']
     bgOrder = params_info['bgOrder']
     hwKSStamp = params_info['hwKSStamp']
-    verbose = params_info.get('verbose', 0)
-    usePCA = params_info.get('usePCA', 0)
-    PCA = params_info.get('PCA', None)
+    # verbose = params_info.get('verbose', 0)
+    # usePCA = params_info.get('usePCA', 0)
+    # PCA = params_info.get('PCA', None)
     statSig = params_info['statSig']
     kerSigReject = params_info['kerSigReject']
     kerFracMask = params_info['kerFracMask']
@@ -966,14 +1051,14 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
     # ciStamps = fit_result['ciStamps']
     ciSa = fit_result.get('ciStamps')
     # 扁平数组字段（从 ctSa/ciSa dict 读取）
-    ctSscnt = ctSa['sscnt'] if ctSa is not None else None
-    ctNss = ctSa['nss'] if ctSa is not None else None
-    ctXss = ctSa['xss'] if ctSa is not None else None
-    ctYss = ctSa['yss'] if ctSa is not None else None
-    ciSscnt = ciSa['sscnt'] if ciSa is not None else None
-    ciNss = ciSa['nss'] if ciSa is not None else None
-    ciXss = ciSa['xss'] if ciSa is not None else None
-    ciYss = ciSa['yss'] if ciSa is not None else None
+    # ctSscnt = ctSa['sscnt'] if ctSa is not None else None
+    # ctNss = ctSa['nss'] if ctSa is not None else None
+    # ctXss = ctSa['xss'] if ctSa is not None else None
+    # ctYss = ctSa['yss'] if ctSa is not None else None
+    # ciSscnt = ciSa['sscnt'] if ciSa is not None else None
+    # ciNss = ciSa['nss'] if ciSa is not None else None
+    # ciXss = ciSa['xss'] if ciSa is not None else None
+    # ciYss = ciSa['yss'] if ciSa is not None else None
 
     ntS = buildstamps_result['ntS']
     niS = buildstamps_result['niS']
@@ -1004,12 +1089,12 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
 
         logger.debug("[region %d] convolve_diff: fitKernel start", region_idx)
         oRData1d = setup_result['oRData'].ravel().copy()
-        fit_result_k = fit_kernel_numpy(
-            ctSa, iRData1d, tRData1d, oRData1d,
+        fit_result_k = fit_kernel_numpy(ctSa, iRData1d, tRData1d, oRData1d,
             nCompKer, kerOrder, bgOrder, nS,
             fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
             kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
-            hwKernel, fwKernel, filter_x, filter_y, fillVal, logger=logger)
+            hwKernel, fwKernel, filter_x, filter_y, fillVal,
+            logger=logger)
         tKerSol = fit_result_k['kernelSol']
         meansigSubstamps = fit_result_k['meansigSubstamps']
         scatterSubstamps = fit_result_k['scatterSubstamps']
@@ -1050,11 +1135,7 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
             rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
         oRData1d[:] = oRData1d_new.ravel()
         mRData1d[:] = mRData1d_new.ravel()
-        # vData = spatial_convolve_fast_numpy(  # 回滚：1K 测试精度不合格
-        #     tRData1d, eRData1d, rPixX, rPixY, tKerSol, oRData1d, mtsRData1d,
-        #     kcStep, hwKernel, fwKernel, kernel, kernel_coeffs,
-        #     convolveVariance, kerFracMask, mRData1d,
-        #     rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+
         if vData is not None:
             eRData1d = vData
 
@@ -1126,12 +1207,12 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
         #     fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
         #     kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
         #     hwKernel, fwKernel, usePCA, filter_x, filter_y, PCA, fillVal)
-        fit_result_k = fit_kernel_numpy(
-            ciSa, tRData1d, iRData1d, oRData1d,
+        fit_result_k = fit_kernel_numpy(ciSa, tRData1d, iRData1d, oRData1d,
             nCompKer, kerOrder, bgOrder, nS,
             fwKSStamp, hwKSStamp, rPixX, rPixY, figMerit,
             kerSigReject, statSig, mRData1d, ngauss, deg_fixe,
-            hwKernel, fwKernel, filter_x, filter_y, fillVal, logger=logger)
+            hwKernel, fwKernel, filter_x, filter_y, fillVal,
+            logger=logger)
         iKerSol = fit_result_k['kernelSol']
         meansigSubstamps = fit_result_k['meansigSubstamps']
         scatterSubstamps = fit_result_k['scatterSubstamps']
@@ -1253,26 +1334,26 @@ def region_convolve_diff_numpy(fit_result, setup_result, buildstamps_result,
     return result
 
 
-def region_output_numpy(convolve_result, setup_result,
-                         diff_out, noise_out, conv_out, mask_out,
-                         ctx_info, params_info, region_idx, stats_list,
-                         logger=None):
+def region_output_numpy(convolve_result: Dict, setup_result: Dict,
+                         diff_out: np.ndarray, noise_out: np.ndarray, conv_out: np.ndarray, mask_out: np.ndarray,
+                         ctx_info: Dict, params_info: Dict, region_idx: int, stats_list: List,
+                         logger: Optional[logging.Logger] = None) -> Optional[Dict]:
     # import time
     logger.debug("[region %d] region_output_numpy start", region_idx)
     # start_time = time.time()
 
-    nCompKer = ctx_info['nCompKer']
-    nBGVectors = ctx_info['nBGVectors']
-    nC = ctx_info['nC']
-    nStamps = ctx_info['nStamps']
+    # nCompKer = ctx_info['nCompKer']
+    # nBGVectors = ctx_info['nBGVectors']
+    # nC = ctx_info['nC']
+    # nStamps = ctx_info['nStamps']
     fwKSStamp = ctx_info['fwKSStamp']
-    fwKernel = ctx_info['fwKernel']
+    # fwKernel = ctx_info['fwKernel']
 
     hwKernel = params_info['hwKernel']
-    kerOrder = params_info['kerOrder']
-    bgOrder = params_info['bgOrder']
+    # kerOrder = params_info['kerOrder']
+    # bgOrder = params_info['bgOrder']
     hwKSStamp = params_info['hwKSStamp']
-    verbose = params_info.get('verbose', 0)
+    # verbose = params_info.get('verbose', 0)
     statSig = params_info['statSig']
     fillVal = params_info['fillVal']
     fillValNoise = params_info['fillValNoise']
@@ -1283,27 +1364,27 @@ def region_output_numpy(convolve_result, setup_result,
 
     rPixX = setup_result['rPixX']
     rPixY = setup_result['rPixY']
-    rXMin = setup_result['rXMin']
-    rYMin = setup_result['rYMin']
-    rXMax = setup_result['rXMax']
-    rYMax = setup_result['rYMax']
+    # rXMin = setup_result['rXMin']
+    # rYMin = setup_result['rYMin']
+    # rXMax = setup_result['rXMax']
+    # rYMax = setup_result['rYMax']
     xBufLo = setup_result['xBufLo']
     yBufLo = setup_result['yBufLo']
-    xBufHi = setup_result['xBufHi']
-    yBufHi = setup_result['yBufHi']
+    # xBufHi = setup_result['xBufHi']
+    # yBufHi = setup_result['yBufHi']
     fpixelOutX = setup_result['fpixelOutX']
     fpixelOutY = setup_result['fpixelOutY']
     lpixelOutX = setup_result['lpixelOutX']
     lpixelOutY = setup_result['lpixelOutY']
-    rXBMin = setup_result['rXBMin']
-    rYBMin = setup_result['rYBMin']
+    # rXBMin = setup_result['rXBMin']
+    # rYBMin = setup_result['rYBMin']
 
     convTmpl = convolve_result['convTmpl']
     nS = convolve_result['nS']
     sumKernel = convolve_result['sumKernel']
     meansigSubstamps = convolve_result['meansigSubstamps']
     scatterSubstamps = convolve_result['scatterSubstamps']
-    NskippedSubstamps = convolve_result['NskippedSubstamps']
+    # NskippedSubstamps = convolve_result['NskippedSubstamps']
 
     oRData = convolve_result['oRData'].copy()
     noiseData = convolve_result['noiseData'].copy()
@@ -1397,7 +1478,7 @@ def region_output_numpy(convolve_result, setup_result,
                         temp2[kk] = sig
                         kk += 1
             # tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
-            mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
+            mean_f, stdev_f = sigma_clip_numpy(temp2[:kk], 10, statSig)[:2]
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
             logger.info("   FINAL Mean sig: %6.3f stdev: %6.3f", meansigSubstampsF, scatterSubstampsF)
@@ -1435,7 +1516,7 @@ def region_output_numpy(convolve_result, setup_result,
                         temp2[kk] = sig
                         kk += 1
             # tm3 = time.time(); logger.debug("[out] final_stamp_sig loop done, %.3fs", tm3 - tm2)
-            mean_f, stdev_f, rc_f = sigma_clip_numpy(temp2[:kk], 10, statSig)
+            mean_f, stdev_f = sigma_clip_numpy(temp2[:kk], 10, statSig)[:2]
             meansigSubstampsF = mean_f
             scatterSubstampsF = stdev_f
             logger.info("    FINAL Mean sig: %6.3f stdev: %6.3f", meansigSubstampsF, scatterSubstampsF)
@@ -1557,27 +1638,30 @@ def region_output_numpy(convolve_result, setup_result,
     logger.debug("[region %d] region_output_numpy done", region_idx)
     return stats
 
-def hotpants(
-    inim, tmplim,
-    tni=None, ini=None, tmi=None, imi=None,
-    tu=25000., tuk=None, tl=0., tg=1., tr=0., tp=0.,
-    iu=25000., iuk=None, il=0., ig=1., ir=0., ip=0.,
-    r=10, ko=2, bgo=1,
-    ng=3, ng_deg=None, ng_sig=None,
-    pca=None,
-    nrx=1, nry=1, rf=None,
-    nsx=10, nsy=10, ssf=None, afssc=1, nss=3, rss=15,
-    ft=20.0, sft=0.5, nft=0.1,
-    ssig=3.0, ks=2.0, kfm=0.99,
-    mins=1.0, mous=1.0,
-    fi=1e-30, fin=0.,
-    c='b', n='t', fom='v',
-    sconv=0, okn=0, convvar=0,
-    v=1, kcs=0,
-    uss=0, savexy=0,
-    dump_dir=None,
-    logger=None,
-):
+def hotpants(inim: np.ndarray, tmplim: np.ndarray,
+    tni: Optional[np.ndarray] = None, ini: Optional[np.ndarray] = None,
+    tmi: Optional[np.ndarray] = None, imi: Optional[np.ndarray] = None,
+    tu: float = 25000., tuk: Optional[float] = None, tl: float = 0.,
+    tg: float = 1., tr: float = 0., tp: float = 0.,
+    iu: float = 25000., iuk: Optional[float] = None, il: float = 0.,
+    ig: float = 1., ir: float = 0., ip: float = 0.,
+    r: int = 10, ko: int = 2, bgo: int = 1,
+    ng: int = 3, ng_deg: Optional[List[int]] = None, ng_sig: Optional[List[float]] = None,
+    pca: Optional[np.ndarray] = None,
+    nrx: int = 1, nry: int = 1, rf: Optional[int] = None,
+    nsx: int = 10, nsy: int = 10, ssf: Optional[List] = None,
+    afssc: int = 1, nss: int = 3, rss: int = 15,
+    ft: float = 20.0, sft: float = 0.5, nft: float = 0.1,
+    ssig: float = 3.0, ks: float = 2.0, kfm: float = 0.99,
+    mins: float = 1.0, mous: float = 1.0,
+    fi: float = 1e-30, fin: float = 0.,
+    c: str = 'b', n: str = 't', fom: str = 'v',
+    sconv: int = 0, okn: int = 0, convvar: int = 0,
+    v: int = 1, kcs: int = 0,
+    uss: int = 0, savexy: int = 0,
+    dump_dir: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
     logging.basicConfig(format='%(asctime)s.%(msecs)03d %(message)s', datefmt='%H:%M:%S', level=logging.DEBUG, stream=sys.stderr)
     if logger is None:
         logger = logging.getLogger('hotpants')
@@ -1659,9 +1743,9 @@ def hotpants(
         ycmp_arr = np.array([p[1] - 1 for p in ssf], dtype=np.float32)
         ncmp = len(ssf)
 
-    c_bytes = c.encode('ascii')
-    n_bytes = n.encode('ascii')
-    fom_bytes = fom.encode('ascii')
+    # c_bytes = c.encode('ascii')
+    # n_bytes = n.encode('ascii')
+    # fom_bytes = fom.encode('ascii')
 
     oNx = max(tNx, iNx)
     oNy = max(tNy, iNy)
