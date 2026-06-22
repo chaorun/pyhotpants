@@ -412,69 +412,7 @@ def get_kernel_vec_numpy(ngauss: int, deg_fixe: List[int], usePCA: int, fwKernel
                 nvec += 1
     return kernel_vec
 
-# numba jit 构建最小二乘拟合矩阵（逐 stamp 累加）
-@numba.jit(nopython=True)
-def build_matrix_jit(all_mat: np.ndarray, all_vectors: np.ndarray, valid_mask: np.ndarray, all_x: np.ndarray, all_y: np.ndarray,
-                     wxy: np.ndarray, matrix: np.ndarray,
-                     nS: int, kerOrder: int, rPixX: int, rPixY: int,
-                     ncomp: int, ncomp1: int, ncomp2: int, nbg_vec: int, pixStamp: int) -> None:
-    """逐 stamp 累加构建最小二乘拟合矩阵。遍历所有有效 stamp，对每个 stamp 计算其归一化坐标 (fx,fy) 的多项式 wxy 向量，将 wxy ⊗ wxy ⊗ all_mat 的三重积累加到输出 matrix 中。
-
-    all_mat: 每个 stamp 的局部矩阵 (nS × mat_size × mat_size) 或等效切片
-    all_vectors: 每个 stamp 的向量，此处仅用于类型编译，计算中不直接使用
-    valid_mask: 有效 stamp 掩码 (nS 长度 int32)
-    all_x, all_y: 每个 stamp 的当前子 stamp 中心坐标
-    wxy: 预计算的 wxy 矩阵 (nS × ncomp2)，由 build_matrix_numpy 预先传入
-    matrix: 输出矩阵 (mat_size+1 × mat_size+1)，原地累加修改
-    nS: stamps 总数
-    kerOrder: 核多项式阶数，用于 wxy 展开计算
-    rPixX, rPixY: region 半宽归一化分母
-    ncomp, ncomp1, ncomp2, nbg_vec, pixStamp: 编译时维度参数（numba jit 要求）
-    """
-    rPixX2 = np.float64(0.5 * rPixX)
-    rPixY2 = np.float64(0.5 * rPixY)
-
-    for istamp in range(nS):
-        if valid_mask[istamp] == 0:
-            continue
-
-        xstamp = all_x[istamp]
-        ystamp = all_y[istamp]
-
-        for i in range(ncomp):
-            i1 = i // ncomp2
-            i2 = i - i1 * ncomp2
-
-            for j in range(i + 1):
-                j1 = j // ncomp2
-                j2 = j - j1 * ncomp2
-
-                matrix[i + 2, j + 2] += wxy[istamp, i2] * wxy[istamp, j2] * all_mat[istamp, i1 + 2, j1 + 2]
-
-        matrix[1, 1] += all_mat[istamp, 1, 1]
-        for i in range(ncomp):
-            i1 = i // ncomp2
-            i2 = i - i1 * ncomp2
-            matrix[i + 2, 1] += wxy[istamp, i2] * all_mat[istamp, i1 + 2, 1]
-
-        for ibg in range(nbg_vec):
-            ii = ncomp + ibg + 1
-            ivecbg = ncomp1 + ibg + 1
-            for i1 in range(1, ncomp1 + 1):
-                p0 = np.dot(all_vectors[istamp, i1, :], all_vectors[istamp, ivecbg, :])
-
-                for i2 in range(ncomp2):
-                    jj = (i1 - 1) * ncomp2 + i2 + 1
-                    matrix[ii + 1, jj + 1] += p0 * wxy[istamp, i2]
-
-            p0 = np.dot(all_vectors[istamp, 0, :], all_vectors[istamp, ivecbg, :])
-            matrix[ii + 1, 1] += p0
-
-            for jbg in range(ibg + 1):
-                q = np.dot(all_vectors[istamp, ivecbg, :], all_vectors[istamp, ncomp1 + jbg + 1, :])
-                matrix[ii + 1, ncomp + jbg + 2] += q
-
-# numba jit 合并构建 matrix + kernelSol（一次 jit 调用完成两个操作）
+# 合并构建 matrix + kernelSol（一次 jit 调用完成两个操作，保留用于 check_stamps）
 @numba.jit(nopython=True)
 def build_both_jit(all_mat: np.ndarray, all_vectors: np.ndarray, all_scprod: np.ndarray,
                     valid_mask: np.ndarray, all_x: np.ndarray, all_y: np.ndarray,
@@ -1069,6 +1007,108 @@ def fill_stamp_numba(saXss: np.ndarray, saYss: np.ndarray, saSscnt: np.ndarray, 
 
     return out_vectors, out_krefArea, out_mat, out_scprod, out_sum_val[:, 0]
 
+# numba jit 批量计算 sig + sigma_clip + mark refill（一次 jit 替代三个步骤）
+@numba.jit(nopython=True)
+def get_sig_and_clip_jit(
+    sa_vectors: np.ndarray, sa_krefArea: np.ndarray,
+    sa_sscnt: np.ndarray, sa_nss: np.ndarray, sa_xss: np.ndarray, sa_yss: np.ndarray,
+    kernelSol: np.ndarray, imNoise: np.ndarray, mRData1d: np.ndarray,
+    fwKSStamp: int, hwKSStamp: int, rPixX: int, rPixY: int,
+    nCompKer: int, kerOrder: int, bgOrder: int, nS: int,
+    sscnt_local: np.ndarray, chi2_local: np.ndarray,
+    refill_flags: np.ndarray, ss: np.ndarray,
+    batched_bg: np.ndarray, batched_coeffs: np.ndarray,
+    kerSigReject: float, statSig: float,
+) -> Tuple[float, float, int]:
+    """一次 jit 调用完成：batch sig → sigma_clip → mark refill。
+    refill_flags 和 sscnt_local 原地修改。返回 (mean, stdev, ncheck)。"""
+    LOCAL_ZVAL = 1e-10; LOCAL_MAXVAL = 1e10
+    LOCAL_IBAD = 0x80; LOCAL_ISNAN = 0x08
+    fwSq = fwKSStamp * fwKSStamp
+
+    nss = 0
+    for si in range(nS):
+        scnt = sa_sscnt[si]
+        if scnt >= sa_nss[si]:
+            chi2_local[si] = -1.0
+            continue
+        bg_val = batched_bg[si]
+        csModel = np.empty(fwSq, dtype=np.float64)
+        coeff0 = kernelSol[1]
+        for i in range(fwSq):
+            csModel[i] = coeff0 * sa_vectors[si, 0, i]
+        for i1j in range(1, nCompKer):
+            coeff2 = batched_coeffs[si, i1j]
+            for i in range(fwSq):
+                csModel[i] += coeff2 * sa_vectors[si, i1j, i]
+        im = sa_krefArea[si]
+        nsig = 0; sig1 = 0.0
+        xi = sa_xss[si, scnt]; yi = sa_yss[si, scnt]
+        for j in range(fwKSStamp):
+            yR = yi - hwKSStamp + j
+            for i in range(fwKSStamp):
+                xR = xi - hwKSStamp + i
+                idk = i + j * fwKSStamp
+                tdat = csModel[idk]; idat = im[idk]
+                ndat = imNoise[xR + rPixX * yR]
+                diff_val = tdat - idat + bg_val
+                mr_idx = xR + rPixX * yR
+                if (mRData1d[mr_idx] & LOCAL_IBAD) or (abs(idat) <= LOCAL_ZVAL):
+                    continue
+                if np.isnan(tdat) or np.isnan(idat):
+                    mRData1d[mr_idx] = mRData1d[mr_idx] | (LOCAL_IBAD | LOCAL_ISNAN)
+                    continue
+                nsig += 1
+                sig1 += diff_val * diff_val / ndat
+        if nsig > 0:
+            sig1 /= nsig
+            if sig1 >= LOCAL_MAXVAL:
+                sig1 = -1.0
+        else:
+            sig1 = -1.0
+        chi2_local[si] = sig1
+        if sig1 != -1.0:
+            ss[nss] = sig1
+            nss += 1
+        else:
+            sscnt_local[si] += 1
+            refill_flags[si] = 1
+
+    if nss == 0:
+        return (0.0, float(MAXVAL), 0)
+
+    arr = np.asarray(ss[:nss], dtype=np.float32).astype(np.float64)
+    count = nss; mask = np.zeros(count, dtype=np.int32)
+    cnt = 0; ncnt = count; iternum = 0
+    mean_val = 0.0; stdev_val = 0.0
+    maxiter = 10
+    while (ncnt != cnt) and (iternum < maxiter):
+        cnt = ncnt
+        good = arr[mask == 0]; ncnt = len(good)
+        if ncnt == 0:
+            return (0.0, float(MAXVAL), 0)
+        mean_val = float(good.mean())
+        if ncnt == 1:
+            return (mean_val, float(MAXVAL), 0)
+        sg = good - mean_val
+        stdev_val = float(np.sqrt(np.sum(sg * sg) / (ncnt - 1)))
+        istdev = 1.0 / stdev_val
+        deviations = np.abs(sg) * istdev
+        new_outliers = deviations > statSig
+        good_indices = np.where(mask == 0)[0]
+        mask[good_indices[new_outliers]] = 1
+        ncnt = count - int(np.sum(mask))
+        iternum += 1
+
+    ncheck = 0
+    for si in range(nS):
+        if sscnt_local[si] < sa_nss[si] and chi2_local[si] != -1.0:
+            if (chi2_local[si] - mean_val) > kerSigReject * stdev_val:
+                sscnt_local[si] += 1
+                refill_flags[si] = 1
+                ncheck = 1
+    return (mean_val, stdev_val, ncheck)
+
 # numba jit 批量计算所有 stamps 的信噪比（figMerit="v" 模式），结果写入 out_sig 数组
 @numba.jit(nopython=True, parallel=True)
 def get_stamp_sig_batch_jit(
@@ -1466,13 +1506,9 @@ def check_stamps_numpy(saScprod: np.ndarray, saMat: np.ndarray, saNorm: np.ndarr
 
         wxy = np.zeros((ntestStamps, ncomp2), dtype=np.float64)
 
-        matrix, _ = build_matrix_numpy(testMat, testVectors, testSscnt, testNss, testXss, testYss,
-                                        ntestStamps, nCompKer, kerOrder, bgOrder,
-                                        fwKSStamp, rPixX, rPixY, nKSStamps=nKSStamps)
-
-        testKerSol = build_scprod_numpy(testScprod, testVectors, testSscnt, testNss, testXss, testYss,
-                                        ntestStamps, imRef, nCompKer, kerOrder, bgOrder,
-                                        fwKSStamp, hwKSStamp, rPixX, wxy, nKSStamps=nKSStamps)
+        matrix, testKerSol, wxy_unused = build_both_numpy(testMat, testVectors, testScprod, testSscnt, testNss, testXss, testYss,
+                                                   ntestStamps, imRef, nCompKer, kerOrder, bgOrder,
+                                                   fwKSStamp, hwKSStamp, rPixX, rPixY, nKSStamps=nKSStamps)
 
         # indx2 = np.zeros(mat_size + 1, dtype=np.int32)
         testKerSol[1:mat_size+1] = np.linalg.solve(
@@ -1668,7 +1704,8 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
                 ax_arr *= xf_batch
             batched_coeffs4[:, i1] = coeff_arr
 
-        get_stamp_sig_batch_jit(
+        refill_flags = np.zeros(nS, dtype=np.int32)
+        mean, stdev, ncheck_j = get_sig_and_clip_jit(
             np.asarray(saVectors, dtype=np.float64), np.asarray(saKrefArea, dtype=np.float64),
             saSscnt, saNss, saXss, saYss,
             np.asarray(kernelSol, dtype=np.float64),
@@ -1676,21 +1713,13 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
             np.asarray(mRData, dtype=np.int32).ravel(),
             fwKSStamp, hwKSStamp, rPixX, rPixY,
             nCompKer, kerOrder, bgOrder, nS,
-            batch_sig1, batch_sig2, batch_sig3,
-            batched_bg=batched_bg, batched_coeffs=batched_coeffs4)
-
-    if batch_sig1 is not None:
-        valid_mask_j = sscnt_local < saNss[:nS]
-        bad_mask = valid_mask_j & (batch_sig1 == -1)
-        sscnt_local[bad_mask] += 1
-        refill_indices.extend(np.where(bad_mask)[0].tolist())
-        if np.any(bad_mask):
-            check = 1
-        good_mask = valid_mask_j & ~bad_mask
-        chi2_local[good_mask] = batch_sig1[good_mask]
-        ng = good_mask.sum()
-        ss[:ng] = batch_sig1[good_mask]
-        nss = ng
+            sscnt_local, chi2_local, refill_flags, ss,
+            batched_bg=batched_bg, batched_coeffs=batched_coeffs4,
+            kerSigReject=kerSigReject, statSig=statSig)
+        refill_indices.extend(np.where(refill_flags > 0)[0].tolist())
+        check = ncheck_j
+        meansigSubstamps = mean
+        scatterSubstamps = stdev
     else:
         for istamp in range(nS):
             if sscnt_local[istamp] < saNss[istamp]:
@@ -1751,16 +1780,16 @@ def check_again_numpy(saSscnt: np.ndarray, saNss: np.ndarray, saChi2: np.ndarray
             else:
                 nskippedSubstamps += 1
 
-    mean, stdev, retcode = sigma_clip_numpy(ss[:nss], maxiter=10, stat_sig=statSig)
+        mean, stdev, retcode = sigma_clip_numpy(ss[:nss], maxiter=10, stat_sig=statSig)
 
-    meansigSubstamps = mean
-    scatterSubstamps = stdev
+        meansigSubstamps = mean
+        scatterSubstamps = stdev
 
-    mask = (sscnt_local < saNss[:nS]) & ((chi2_local - mean) > kerSigReject * stdev)
-    sscnt_local[mask] += 1
-    refill_indices.extend(np.where(mask)[0].tolist())
-    if np.any(mask):
-        check = 1
+        mask = (sscnt_local < saNss[:nS]) & ((chi2_local - mean) > kerSigReject * stdev)
+        sscnt_local[mask] += 1
+        refill_indices.extend(np.where(mask)[0].tolist())
+        if np.any(mask):
+            check = 1
 
     return (check, meansigSubstamps, scatterSubstamps, nskippedSubstamps,
             refill_indices, sscnt_local, chi2_local)
