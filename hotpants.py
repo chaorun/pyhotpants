@@ -16,7 +16,7 @@ from .functions import make_noise_image4_numpy
 #    psfCentersJit, cut_stamp_numpy, Ran1,
 # BUILD_STAMP_FLAT_CACHE, LAST_SIGMA_CLIP, LAST_N, LAST_MEDIAN,
 
-from .alard import background_loop_jit, get_final_stamp_sig_numpy
+from .alard import get_final_stamp_sig_numpy  # background_loop_jit merged into spatial_convolve_jit_kernel
 from .alard import make_kernel_numpy, get_kernel_vec_numpy
 from .alard import fill_stamp_numba, spatial_convolve_fast_numpy
 from .alard import check_stamps_numpy, fit_kernel_numpy
@@ -1132,7 +1132,7 @@ def region_convolve_diff_numpy(fit_result: Dict, setup_result: Dict, buildstamps
             tRData1d, eRData1d, rPixX, rPixY, tKerSol, mtsRData1d,
             kcStep, hwKernel, fwKernel,
             convolveVariance, kerFracMask,
-            rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+            rPixX, rPixY, nCompKer, kerOrder, bgOrder, kernel_vec)
         oRData1d[:] = oRData1d_new.ravel()
         mRData1d[:] = mRData1d_new.ravel()
 
@@ -1142,7 +1142,7 @@ def region_convolve_diff_numpy(fit_result: Dict, setup_result: Dict, buildstamps
         logger.debug("[region %d] convolve_diff: spatial_convolve done", region_idx)
         logger.debug("[region %d] convolve_diff: background start", region_idx)
 
-        background_loop_jit(oRData1d, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel)
+        # background_loop_jit(oRData1d, tKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel)
 
         logger.debug("[region %d] convolve_diff: background done", region_idx)
         logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)
@@ -1253,7 +1253,7 @@ def region_convolve_diff_numpy(fit_result: Dict, setup_result: Dict, buildstamps
             iRData1d, eRData1d, rPixX, rPixY, iKerSol, misRData1d,
             kcStep, hwKernel, fwKernel,
             convolveVariance, kerFracMask,
-            rPixX, rPixY, nCompKer, kerOrder, kernel_vec)
+            rPixX, rPixY, nCompKer, kerOrder, bgOrder, kernel_vec)
         oRData1d[:] = oRData1d_new.ravel()
         mRData1d[:] = mRData1d_new.ravel()
         if vData is not None:
@@ -1262,7 +1262,7 @@ def region_convolve_diff_numpy(fit_result: Dict, setup_result: Dict, buildstamps
         logger.debug("[region %d] convolve_diff: spatial_convolve done", region_idx)
         logger.debug("[region %d] convolve_diff: background start", region_idx)
 
-        background_loop_jit(oRData1d, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel)
+        # background_loop_jit(oRData1d, iKerSol, nCompKer, kerOrder, bgOrder, rPixX, rPixY, hwKernel)
 
         logger.debug("[region %d] convolve_diff: background done", region_idx)
         logger.debug("[region %d] convolve_diff: make_kernel start", region_idx)

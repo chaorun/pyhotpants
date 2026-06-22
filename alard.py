@@ -58,7 +58,7 @@ def spatial_convolve_jit_kernel(
     image: np.ndarray, variance: np.ndarray, cMask: np.ndarray,
     cRdata: np.ndarray, vData: np.ndarray, mRData: np.ndarray,
     kernelSol: np.ndarray,
-    xSize: int, ySize: int, nCompKer: int, kerOrder: int, fwKernel: int, hwKernel: int,
+    xSize: int, ySize: int, nCompKer: int, kerOrder: int, bgOrder: int, fwKernel: int, hwKernel: int,
     kcStep: int, rPixX: int, rPixY: int, kerFracMask: float, dovar: int, convolveVariance: int,
     kernel_vec_2d: np.ndarray,
     allKernels: Optional[np.ndarray] = None,
@@ -181,6 +181,26 @@ def spatial_convolve_jit_kernel(
                             mRData[ni] = mRData[ni] | (FLAG_OUTPUT_ISBAD | FLAG_BAD_CONV)
                         else:
                             mRData[ni] = mRData[ni] | FLAG_OK_CONV
+
+    nCompForBG = nCompKer - 1
+    ncompBG = nCompForBG * (((kerOrder + 1) * (kerOrder + 2)) // 2) + 1
+    halfX = np.float64(0.5 * rPixX)
+    halfY = np.float64(0.5 * rPixY)
+    for j in range(hwKernel, ySize - hwKernel):
+        yf = (j - halfY) / halfY
+        for i in range(hwKernel, xSize - hwKernel):
+            xf = (i - halfX) / halfX
+            bg = np.float64(0.0)
+            k = 1
+            ax = np.float64(1.0)
+            for idegx in range(bgOrder + 1):
+                ay = np.float64(1.0)
+                for idegy in range(bgOrder - idegx + 1):
+                    bg += kernelSol[ncompBG + k] * ax * ay
+                    k += 1
+                    ay *= yf
+                ax *= xf
+            cRdata[i + xSize * j] += bg
 
 # 将多项式背景叠加到输出图像上（原地修改 oRData1d）
 @numba.jit(nopython=True)
@@ -1343,7 +1363,7 @@ def get_stamp_sig_jit(vectors: np.ndarray, kernelSol: np.ndarray, imNoise: np.nd
 def spatial_convolve_fast_numpy(image: np.ndarray, variance: np.ndarray, xSize: int, ySize: int, kernelSol: np.ndarray, cMask: np.ndarray, kcStep: int,
                                 hwKernel: int, fwKernel: int,
                                 convolveVariance: int, kerFracMask: float,
-                                rPixX: int, rPixY: int, nCompKer: int, kerOrder: int, kernel_vec: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                rPixX: int, rPixY: int, nCompKer: int, kerOrder: int, bgOrder: int, kernel_vec: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """快速空间域卷积：预计算所有 kcStep 块的核，调用 spatial_convolve_jit_kernel 一次遍历完成卷积、variance 计算和 mask 标记。将图像和 variance 转换为 1D float64 数组，调用 buildAllKernels 预计算块核，然后启动 numba jit kernel 并行处理。
 
     image: 输入图像 1D 或 2D 数组
@@ -1393,7 +1413,7 @@ def spatial_convolve_fast_numpy(image: np.ndarray, variance: np.ndarray, xSize: 
 
     spatial_convolve_jit_kernel(image1d, var1d, cMask1d,
         cRdata64, vData64, mRData64, kernelSol.astype(np.float64),
-        xSize, ySize, nCompKer, kerOrder, fwKernel, hwKernel,
+        xSize, ySize, nCompKer, kerOrder, bgOrder, fwKernel, hwKernel,
         kcStep, rPixX, rPixY, kerFracMask, dovar, convolveVariance,
         kernel_vec_2d, allKernels=allKernels, nstepsX_in=nstepsX)
 
