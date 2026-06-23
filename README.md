@@ -266,13 +266,6 @@ HOTPANTS_IO_DUMP=debug_dump raw_code/hotpants -inim sci.fits -tmplim tmpl.fits -
 
 dump 文件为二进制格式，每个变量按 `[name_len(int32)][name][data_len(int64)][data]` 顺序存储，两端格式一致可直接 `cmp` 对比。
 
-### replay 工具
-
-从 bin 文件读入参数直接调用 hotpants_compute，可复现任意输入：
-```bash
-cd raw_code && make && gcc -funroll-loops -O3 -ansi -std=c99 -I/opt/homebrew/include -c replay.c && gcc replay.o alard.o functions.o hotpants_compute.o -o replay -L/opt/homebrew/lib -lm -lcfitsio
-./replay input.bin output.bin
-```
 
 ## 已知限制
 
