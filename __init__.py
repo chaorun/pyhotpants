@@ -1,1 +1,1 @@
-from .hotpants import hotpants
+from .interface import hotpants

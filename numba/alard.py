@@ -5,7 +5,7 @@ import numba
 from typing import List, Dict, Tuple, Optional
 # 从typing模块导入类型标注工具
 
-from .functions import MAXVAL, sigma_clip_numpy, get_stamp_stats3_numpy
+from ..functions import MAXVAL, sigma_clip_numpy, get_stamp_stats3_numpy
 # 从functions子模块导入最大值常量、Sigma裁剪函数、Stamp统计量计算函数
 
 

@@ -8,17 +8,17 @@ import logging
 # 导入日志模块，用于分级输出调试信息
 from typing import List, Dict, Tuple, Optional
 # 从typing模块导入类型标注工具：列表、字典、元组、可选类型
-from .functions import FLAG_BAD_PIXVAL, FLAG_SAT_PIXEL, FLAG_LOW_PIXEL
-# 从functions子模块导入像素质量标记常量：坏值(0x01)、饱和(0x02)、过低(0x04)
-from .functions import FLAG_INPUT_ISBAD, FLAG_OUTPUT_ISBAD
+from ..functions import FLAG_BAD_PIXVAL, FLAG_SAT_PIXEL, FLAG_LOW_PIXEL
+# 从共用functions模块导入像素质量标记常量：坏值(0x01)、饱和(0x02)、过低(0x04)
+from ..functions import FLAG_INPUT_ISBAD, FLAG_OUTPUT_ISBAD
 # 导入输入坏像素标记(0x80)和输出坏像素标记(0x8000)
-from .functions import sigma_clip_numpy, get_noise_stats3_numpy
+from ..functions import sigma_clip_numpy, get_noise_stats3_numpy
 # 导入Sigma裁剪函数（迭代剔除离群值）和噪声统计函数（均值/中位数/众数/标准差/X2NORM）
-from .functions import insert_subregion_flt_numpy, insert_subregion_int_numpy
+from ..functions import insert_subregion_flt_numpy, insert_subregion_int_numpy
 # 导入子区域插入函数：将浮点/整数区域图像写入全图指定位置
-from .functions import get_stamp_stats3_numpy, buildStampsNumba
+from ..functions import get_stamp_stats3_numpy, buildStampsNumba
 # 导入Stamp统计量计算函数和Numba加速的批量Stamp构建函数
-from .functions import make_noise_image4_numpy
+from ..functions import make_noise_image4_numpy
 # 导入噪声图像生成函数：基于增益和读出噪声计算方差图像
 # ZEROVAL, MAXVAL,
 # 以下为历史遗留注释：对应函数已被合并、内联或删除

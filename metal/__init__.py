@@ -1,0 +1,1 @@
+from .hotpants import hotpants
